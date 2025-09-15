@@ -1,3 +1,8 @@
+--find-links https://download.pytorch.org/whl/torch/
+--find-links https://download.pytorch.org/whl/torchvision/
+torch==2.8.0+cu129
+torchvision==0.23.0+cu129
+
 # Core AI stack
 diffusers==0.34.0
 transformers==4.53.1
@@ -54,6 +59,16 @@ ftfy
 piexif
 pynvml
 misaki
+
+# Celery worker related
+pycryptodome
+mysql-connector-python
+requests
+pika
+gpustat
+celery
+uvicorn
+fastapi
 
 # Optional / commented out
 # transformers==4.46.3  # for llamallava pre-patch
