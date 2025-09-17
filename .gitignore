@@ -42,3 +42,4 @@ ckpts/
 loras/
 loras_i2v/
 venv/
+wgp_config.json
