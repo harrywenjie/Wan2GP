@@ -5016,10 +5016,7 @@ def generate_video(
         else:
             mp4_files = glob.glob(os.path.join(save_path, "*.mp4"))
             video_source = max(mp4_files, key=os.path.getmtime) if mp4_files else None                            
-    if is_image:
-        fps = 1
-    else:
-        fps = get_computed_fps(force_fps, base_model_type , video_guide, video_source )
+    fps = 1 if is_image else get_computed_fps(force_fps, base_model_type , video_guide, video_source )
     control_audio_tracks = source_audio_tracks = source_audio_metadata = []
     if "R" in audio_prompt_type and video_guide is not None and MMAudio_setting == 0 and not any_letters(audio_prompt_type, "ABX"):
         control_audio_tracks, _  = extract_audio_tracks(video_guide)
