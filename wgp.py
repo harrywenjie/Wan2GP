@@ -172,25 +172,6 @@ def format_time(seconds):
     else:
         return f"{seconds:.1f}s"
 
-def get_pastel_color(index):
-    hue = (index * 137.508 + 22241) % 360
-    saturation = 70 + (index * 47) % 11
-    lightness = 90 + (index * 23) % 5
-    return f"hsl({hue:.0f}, {saturation}%, {lightness}%)"
-
-def get_alternating_grey_color(index):
-    if index % 2 == 0:
-        return "#F8FAFC"
-    else:
-        return "transparent"
-
-def get_queue_item_color(index):
-    scheme = server_config.get("queue_color_scheme", "pastel")
-    if scheme == "alternating_grey":
-        return get_alternating_grey_color(index)
-    else:
-        return get_pastel_color(index)
-
 def format_generation_time(seconds):
     """Format generation time showing raw seconds with human-readable time in parentheses when over 60s"""
     raw_seconds = f"{int(seconds)}s"
