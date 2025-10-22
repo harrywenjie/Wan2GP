@@ -61,7 +61,8 @@ If you have access to a terminal window :
 ```
 cd installation_path_of_wangp
 git fetch origin && git reset --hard origin/main
-pip install -r requirements.txt```
+pip install -r requirements.txt
+```
 
 2) **Generic Method**
 a) move outside the installation WanGP folder the folders **ckpts**, **settings**, **outputs** and all the **loras** folders and the file **wgp_config.json**
