@@ -968,14 +968,12 @@ def add_video_task(**inputs):
     queue = gen["queue"]
     task_id += 1
     current_task_id = task_id
-    item_color = get_queue_item_color(current_task_id)
 
     start_image_data, end_image_data, start_image_labels, end_image_labels = get_preview_images(inputs)
     plugin_data = inputs.pop('plugin_data', {})
     
     queue.append({
         "id": current_task_id,
-        "color": item_color,
         "params": inputs.copy(),
         "plugin_data": plugin_data,
         "repeats": inputs.get("repeat_generation",1),
@@ -1320,8 +1318,6 @@ def load_queue_action(filepath, state, evt:gr.EventData):
                 }
                 newly_loaded_queue.append(runtime_task)
                 print(f"[load_queue_action] Reconstructed task {task_index+1}/{len(loaded_manifest)}, ID: {task_id_loaded}")
-        for i, task in enumerate(newly_loaded_queue):
-            task['color'] = get_queue_item_color(i)
 
         with lock:
             print("[load_queue_action] Acquiring lock to update state...")
@@ -1600,6 +1596,8 @@ def generate_queue_html(queue):
     """
     
     table_rows = []
+    scheme = server_config.get("queue_color_scheme", "pastel")
+
     for i, item in enumerate(queue):
         if i == 0:
             continue
@@ -1632,9 +1630,20 @@ def generate_queue_html(queue):
         edit_btn = f"""<button onclick="updateAndTrigger('edit_{task_id}')" class="action-button" title="Edit"><img src="/gradio_api/file=icons/edit.svg" style="width: 20px; height: 20px;"></button>"""
         remove_btn = f"""<button onclick="updateAndTrigger('remove_{task_id}')" class="action-button" title="Remove"><img src="/gradio_api/file=icons/remove.svg" style="width: 20px; height: 20px;"></button>"""
 
-        item_color = item.get('color', 'transparent')
+        row_class = "draggable-row"
+        row_style = ""
+        
+        if scheme == "pastel":
+            hue = (task_id * 137.508 + 22241) % 360
+            row_class += " pastel-row"
+            row_style = f'--item-hue: {hue:.0f};'
+        else:
+            row_class += " alternating-grey-row"
+            if row_index % 2 == 0:
+                row_class += " even-row"
+                
         row_html = f"""
-        <tr draggable="true" class="draggable-row" data-index="{row_index}" style="background-color: {item_color};" title="Drag to reorder">
+        <tr draggable="true" class="{row_class}" data-index="{row_index}" style="{row_style}" title="Drag to reorder">
             <td class="center-align">{item.get('repeats', "1")}</td>
             <td>{prompt_cell}</td>
             <td class="center-align">{length}</td>
@@ -9800,6 +9809,26 @@ def create_ui():
         }
         #edit_tab_cancel_button:hover {
             background-color: #e2505c !important;
+        }
+        #queue_html_container .pastel-row {
+            background-color: hsl(var(--item-hue, 0), 80%, 92%);
+        }
+        #queue_html_container .alternating-grey-row.even-row {
+            background-color: #F8FAFC; /* Light mode grey */
+        }
+        @media (prefers-color-scheme: dark) {
+            #queue_html_container tr:hover td {
+                 background-color: rgba(255, 255, 255, 0.1) !important;
+            }
+            #queue_html_container .pastel-row {
+                background-color: hsl(var(--item-hue, 0), 35%, 25%);
+            }
+            #queue_html_container .alternating-grey-row.even-row {
+                background-color: #2a3748; /* Dark mode grey */
+            }
+            #queue_html_container .alternating-grey-row {
+                background-color: transparent;
+            }
         }
         #queue_html_container table {
             font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif;
