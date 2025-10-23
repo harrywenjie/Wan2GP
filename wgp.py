@@ -73,8 +73,8 @@ from collections import defaultdict
 global_queue_ref = []
 AUTOSAVE_FILENAME = "queue.zip"
 PROMPT_VARS_MAX = 10
-target_mmgp_version = "3.6.6"
-WanGP_version = "9.01"
+target_mmgp_version = "3.6.7"
+WanGP_version = "9.10"
 settings_version = 2.39
 max_source_video_frames = 3000
 prompt_enhancer_image_caption_model, prompt_enhancer_image_caption_processor, prompt_enhancer_llm_model, prompt_enhancer_llm_tokenizer = None, None, None, None
@@ -3469,7 +3469,7 @@ def refresh_gallery(state): #, msg
     queue = gen.get("queue", [])
     abort_interactive = not gen.get("abort", False)
     if not in_progress or len(queue) == 0:
-        return gr.Gallery(value = file_list) if last_was_audio else gr.Gallery(selected_index=choice, value = file_list),  *pack_audio_gallery_state(audio_file_list, audio_choice), gr.HTML("", visible= False),  gr.Button(visible=True), gr.Button(visible=False), gr.Row(visible=False), gr.Row(visible=False), update_queue_data(queue), gr.Button(interactive=  abort_interactive), gr.Button(visible= False)
+        return gr.Gallery(value = file_list) if last_was_audio else gr.Gallery(selected_index=choice, value = file_list), gr.update() if last_was_audio else choice, *pack_audio_gallery_state(audio_file_list, audio_choice), gr.HTML("", visible= False),  gr.Button(visible=True), gr.Button(visible=False), gr.Row(visible=False), gr.Row(visible=False), update_queue_data(queue), gr.Button(interactive=  abort_interactive), gr.Button(visible= False)
     else:
         task = queue[0]
         prompt =  task["prompt"]
@@ -3527,7 +3527,11 @@ def refresh_gallery(state): #, msg
         gen_buttons_visible = True
         html =  f"<TABLE WIDTH=100% ID=PINFO style='{table_style}'><TR style='height:140px'><TD width=100% style='{table_style}'>" + prompt + "</TD>" + thumbnails + "</TR></TABLE>" 
         html_output = gr.HTML(html, visible= True)
-        return gr.Gallery(value = file_list) if last_was_audio else gr.Gallery(selected_index=choice, value = file_list), *pack_audio_gallery_state(audio_file_list, audio_choice), html_output, gr.Button(visible=False), gr.Button(visible=True), gr.Row(visible=True), gr.Row(visible= gen_buttons_visible), update_queue_data(queue), gr.Button(interactive=  abort_interactive), gr.Button(visible= onemorewindow_visible)
+        if last_was_audio:
+            audio_choice = max(0, audio_choice)
+        else:
+            choice = max(0, choice)
+        return gr.Gallery(value = file_list) if last_was_audio else gr.Gallery(selected_index=choice, value = file_list), gr.update() if last_was_audio else choice, *pack_audio_gallery_state(audio_file_list, audio_choice), html_output, gr.Button(visible=False), gr.Button(visible=True), gr.Row(visible=True), gr.Row(visible= gen_buttons_visible), update_queue_data(queue), gr.Button(interactive=  abort_interactive), gr.Button(visible= onemorewindow_visible)
 
 
 
@@ -6992,7 +6996,8 @@ def use_video_settings(state, input_file_list, choice, source):
     if any_audio:
         input_file_list = unpack_audio_list(input_file_list)
     file_list, file_settings_list = get_file_list(state, input_file_list, audio_files=any_audio)
-    if choice != None and choice >=0 and len(file_list)>0:
+    if choice != None and len(file_list)>0:
+        choice= max(0, choice)
         configs = file_settings_list[choice]
         file_name= file_list[choice]
         if configs == None:
@@ -7027,7 +7032,7 @@ def use_video_settings(state, input_file_list, choice, source):
             else:
                 return *generate_dropdown_model_list(model_type), gr.update()
     else:
-        gr.Info(f"No Medium is Selected")
+        gr.Info(f"Please Select a File")
 
     return gr.update(), gr.update(), gr.update(), gr.update()
 loras_url_cache = None
@@ -9096,7 +9101,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
             if tab_id == 'generate':
                 output_trigger.change(refresh_gallery,
                     inputs = [state], 
-                    outputs = [output, audio_files_paths, audio_file_selected, audio_gallery_refresh_trigger, gen_info, generate_btn, add_to_queue_btn, current_gen_column, current_gen_buttons_row, queue_html, abort_btn, onemorewindow_btn],
+                    outputs = [output, last_choice, audio_files_paths, audio_file_selected, audio_gallery_refresh_trigger, gen_info, generate_btn, add_to_queue_btn, current_gen_column, current_gen_buttons_row, queue_html, abort_btn, onemorewindow_btn],
                     show_progress="hidden"
                     )
 
