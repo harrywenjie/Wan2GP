@@ -472,7 +472,7 @@ AG.tryInstall();
 
             .selected-filename {{
                 padding: 4px 12px;
-                background: #27272a;
+                background: #f0f0f0;
                 border-radius: 4px;
                 font-size: 14px;
                 font-weight: 500;
@@ -493,7 +493,7 @@ AG.tryInstall();
                 flex-direction: row;
                 border: 1px solid #e0e0e0;
                 border-radius: 8px;
-                background: #27272a;
+                background: #fafafa;
                 min-height: 120px;
             }}
 
@@ -506,7 +506,7 @@ AG.tryInstall();
                 border: 2px solid #d0d0d0;
                 border-radius: 8px;
                 cursor: pointer;
-                background: #27272a;
+                background: white;
                 transition: all 0.2s ease;
                 display: flex;
                 flex-direction: column;
@@ -542,7 +542,7 @@ AG.tryInstall();
 
             .audio-thumbnail.selected {{
                 border-color: #2196F3;
-                background: #27272a;
+                background: #E3F2FD;
                 box-shadow: 0 2px 12px rgba(33, 150, 243, 0.4);
             }}
 
