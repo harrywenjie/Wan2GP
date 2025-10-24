@@ -4988,6 +4988,12 @@ def generate_video(
 
     _, _, latent_size = get_model_min_frames_and_step(model_type)  
     video_length = (video_length -1) // latent_size * latent_size + 1
+    if sliding_window_size !=0:
+        sliding_window_size = (sliding_window_size -1) // latent_size * latent_size + 1
+    if sliding_window_overlap !=0:
+        sliding_window_overlap = (sliding_window_overlap -1) // latent_size * latent_size + 1
+    if sliding_window_discard_last_frames !=0:
+        sliding_window_discard_last_frames = sliding_window_discard_last_frames // latent_size * latent_size 
 
     current_video_length = video_length
     # VAE Tiling
@@ -8046,10 +8052,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                         delete_lset_btn = gr.Button("Delete", size="sm", min_width= 1, visible = True)
                         cancel_lset_btn = gr.Button("Don't do it !", size="sm", min_width= 1 , visible=False)  
                         #confirm_save_lset_btn, confirm_delete_lset_btn, save_lset_btn, delete_lset_btn, cancel_lset_btn
-            trigger_refresh_input_type = gr.Text(interactive= False, visible= False)
             t2v =  test_class_t2v(base_model_type) 
-            t2v_1_3B =  base_model_type in ["t2v_1.3B"] 
-            flf2v = base_model_type == "flf2v_720p"
             base_model_family = get_model_family(base_model_type)
             diffusion_forcing = "diffusion_forcing" in model_filename 
             ltxv = "ltxv" in model_filename 
@@ -8058,7 +8061,6 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
             any_mag_cache = model_def.get("mag_cache", False)
             recammaster = base_model_type in ["recam_1.3B"]
             vace = test_vace_module(base_model_type)
-            phantom = base_model_type in ["phantom_1.3B", "phantom_14B"]
             fantasy = base_model_type in ["fantasy"]
             multitalk = model_def.get("multitalk_class", False)
             infinitetalk =  base_model_type in ["infinitetalk"]
@@ -8066,8 +8068,6 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
             hunyuan_i2v = "hunyuan_video_i2v" in model_filename
             hunyuan_video_custom_edit = base_model_type in ["hunyuan_custom_edit"]
             hunyuan_video_avatar = "hunyuan_video_avatar" in model_filename
-            flux =  base_model_family in ["flux"]
-            qwen =  base_model_family in ["qwen"]
             image_outputs = model_def.get("image_outputs", False)
             sliding_window_enabled = test_any_sliding_window(model_type)
             multi_prompts_gen_type_value = ui_defaults.get("multi_prompts_gen_type_value",0)

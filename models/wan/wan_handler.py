@@ -10,7 +10,7 @@ def test_class_i2v(base_model_type):
     return base_model_type in ["i2v", "i2v_2_2", "fun_inp_1.3B", "fun_inp", "flf2v_720p",  "fantasy",  "multitalk", "infinitetalk", "i2v_2_2_multitalk", "animate" ]
 
 def test_class_t2v(base_model_type):    
-    return base_model_type in ["t2v", "t2v_2_2", "alpha"]
+    return base_model_type in ["t2v", "t2v_2_2", "alpha", "lynx"]
 
 def text_oneframe_overlap(base_model_type):
     return test_class_i2v(base_model_type) and not (test_multitalk(base_model_type) or base_model_type in ["animate"]) or test_wan_5B(base_model_type)
