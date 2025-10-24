@@ -198,7 +198,10 @@ class WanLayerNorm(nn.LayerNorm):
         # return F.layer_norm(
         #     input, self.normalized_shape, self.weight, self.bias, self.eps
         # )
-        y = super().forward(x)
+        if self.weight is not None:
+            y = super().forward(x.to(self.weight.dtype))
+        else:
+            y = super().forward(x)
         x = y.type_as(x)
         return x
         # return super().forward(x).type_as(x)
@@ -897,8 +900,8 @@ class WanModel(ModelMixin, ConfigMixin):
         if first == None:
             return sd
 
-        new_sd = {}
 
+        # new_sd = {}
         # for k,v in sd.items():
         #     if k.endswith("modulation.diff"):
         #         pass
@@ -911,6 +914,25 @@ class WanModel(ModelMixin, ConfigMixin):
         #     for k,v in sd.items():
         #         new_sd["diffusion_model." + k] = v
         #     sd = new_sd
+        if ".default." in first:
+            new_sd = {}
+            for k,v in sd.items():
+                k = k.replace(".default.", ".")
+                new_sd[k] = v 
+            sd = new_sd
+
+        if first.startswith("vace_blocks."):
+            new_sd = {}
+            for k,v in sd.items():
+                if k.startswith("vace_blocks."):
+                    l = k.split(".")
+                    block_no = self.vace_layers[int(l[1])]
+                    l[0] = "blocks." + str(block_no)
+                    l[1] = "vace"
+                    k = ".".join(l)
+                    print(k)
+                new_sd[k] = v 
+            sd = new_sd
 
         if first.startswith("lora_unet_"):
             new_sd = {}
@@ -1141,6 +1163,8 @@ class WanModel(ModelMixin, ConfigMixin):
 
 
     def lock_layers_dtypes(self, hybrid_dtype = None, dtype = torch.float32):
+        from optimum.quanto import QTensor
+
         layer_list = [self.head, self.head.head, self.patch_embedding]
         target_dype= dtype
         
@@ -1174,10 +1198,11 @@ class WanModel(ModelMixin, ConfigMixin):
             for layer in current_layer_list:
                 layer._lock_dtype = dtype
 
-                if hasattr(layer, "weight") and layer.weight.dtype != current_dtype :
-                    layer.weight.data = layer.weight.data.to(current_dtype)
-                    if hasattr(layer, "bias"):
-                        layer.bias.data = layer.bias.data.to(current_dtype)
+                if hasattr(layer, "weight") and layer.weight.dtype != current_dtype:
+                    if not isinstance(layer.weight.data, QTensor):
+                        layer.weight.data = layer.weight.data.to(current_dtype)
+                        if hasattr(layer, "bias"):
+                            layer.bias.data = layer.bias.data.to(current_dtype)
 
         self._lock_dtype = dtype
 
@@ -1333,7 +1358,6 @@ class WanModel(ModelMixin, ConfigMixin):
     ):
         # patch_dtype =  self.patch_embedding.weight.dtype
         modulation_dtype = self.time_projection[1].weight.dtype
-
         if self.model_type == 'i2v':
             assert clip_fea is not None and y is not None
         # params

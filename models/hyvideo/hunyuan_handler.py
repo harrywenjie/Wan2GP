@@ -1,12 +1,13 @@
 import torch
+from shared.utils import files_locator as fl 
 
 def get_hunyuan_text_encoder_filename(text_encoder_quantization):
     if text_encoder_quantization =="int8":
-        text_encoder_filename = "ckpts/llava-llama-3-8b/llava-llama-3-8b-v1_1_vlm_quanto_int8.safetensors"
+        text_encoder_filename = "llava-llama-3-8b/llava-llama-3-8b-v1_1_vlm_quanto_int8.safetensors"
     else:
-        text_encoder_filename = "ckpts/llava-llama-3-8b/llava-llama-3-8b-v1_1_vlm_fp16.safetensors"
+        text_encoder_filename = "llava-llama-3-8b/llava-llama-3-8b-v1_1_vlm_fp16.safetensors"
 
-    return text_encoder_filename
+    return fl.locate_file(text_encoder_filename, True)
 
 class family_handler():
 
@@ -129,7 +130,7 @@ class family_handler():
         } 
 
     @staticmethod
-    def load_model(model_filename, model_type = None,  base_model_type = None, model_def = None, quantizeTransformer = False, text_encoder_quantization = None, dtype = torch.bfloat16, VAE_dtype = torch.float32, mixed_precision_transformer = False, save_quantized = False, submodel_no_list = None):
+    def load_model(model_filename, model_type = None,  base_model_type = None, model_def = None, quantizeTransformer = False, text_encoder_quantization = None, dtype = torch.bfloat16, VAE_dtype = torch.float32, mixed_precision_transformer = False, save_quantized = False, submodel_no_list = None, override_text_encoder = None):
         from .hunyuan import HunyuanVideoSampler
         from mmgp import offload
 
@@ -137,7 +138,7 @@ class family_handler():
             model_filepath = model_filename,
             model_type = model_type, 
             base_model_type = base_model_type,
-            text_encoder_filepath = get_hunyuan_text_encoder_filename(text_encoder_quantization),
+            text_encoder_filepath = get_hunyuan_text_encoder_filename(text_encoder_quantization) if override_text_encoder is None else override_text_encoder,
             dtype = dtype,
             quantizeTransformer = quantizeTransformer,
             VAE_dtype = VAE_dtype, 

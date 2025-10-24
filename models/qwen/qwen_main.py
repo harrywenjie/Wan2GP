@@ -18,6 +18,7 @@ from diffusers import FlowMatchEulerDiscreteScheduler
 from .pipeline_qwenimage import QwenImagePipeline
 from PIL import Image
 from shared.utils.utils import calculate_new_dimensions, convert_tensor_to_image
+from shared.utils import files_locator as fl 
 
 def stitch_images(img1, img2):
     # Resize img2 to match img1's height
@@ -52,11 +53,11 @@ class model_factory():
         processor = None
         tokenizer = None
         if base_model_type in ["qwen_image_edit_20B", "qwen_image_edit_plus_20B"]:
-            processor = Qwen2VLProcessor.from_pretrained(os.path.join(checkpoint_dir,"Qwen2.5-VL-7B-Instruct"))
-        tokenizer = AutoTokenizer.from_pretrained(os.path.join(checkpoint_dir,"Qwen2.5-VL-7B-Instruct"))
+            processor = Qwen2VLProcessor.from_pretrained(fl.locate_folder("Qwen2.5-VL-7B-Instruct"))
+        tokenizer = AutoTokenizer.from_pretrained(fl.locate_folder("Qwen2.5-VL-7B-Instruct"))
         self.base_model_type = base_model_type
 
-        base_config_file = "configs/qwen_image_20B.json" 
+        base_config_file = "models/qwen/configs/qwen_image_20B.json" 
         with open(base_config_file, 'r', encoding='utf-8') as f:
             transformer_config = json.load(f)
         transformer_config.pop("_diffusers_version")
@@ -82,12 +83,12 @@ class model_factory():
             from wgp import save_quantized_model
             save_quantized_model(transformer, model_type, model_filename[0], dtype, base_config_file)
 
-        text_encoder = offload.fast_load_transformers_model(text_encoder_filename,  writable_tensors= True , modelClass=Qwen2_5_VLForConditionalGeneration,  defaultConfigPath= os.path.join(checkpoint_dir, "Qwen2.5-VL-7B-Instruct", "config.json"))
+        text_encoder = offload.fast_load_transformers_model(text_encoder_filename,  writable_tensors= True , modelClass=Qwen2_5_VLForConditionalGeneration,  defaultConfigPath= fl.locate_file(os.path.join("Qwen2.5-VL-7B-Instruct", "config.json")) )
         # text_encoder = offload.fast_load_transformers_model(text_encoder_filename, do_quantize=True,  writable_tensors= True , modelClass=Qwen2_5_VLForConditionalGeneration, defaultConfigPath="text_encoder_config.json", verboseLevel=2)
         # text_encoder.to(torch.float16)
         # offload.save_model(text_encoder, "text_encoder_quanto_fp16.safetensors", do_quantize= True)
 
-        vae = offload.fast_load_transformers_model( os.path.join(checkpoint_dir,"qwen_vae.safetensors"), writable_tensors= True , modelClass=AutoencoderKLQwenImage, defaultConfigPath=os.path.join(checkpoint_dir,"qwen_vae_config.json"))
+        vae = offload.fast_load_transformers_model( fl.locate_file("qwen_vae.safetensors"), writable_tensors= True , modelClass=AutoencoderKLQwenImage, defaultConfigPath= fl.locate_file("qwen_vae_config.json"))
         
         self.pipeline = QwenImagePipeline(vae, text_encoder, tokenizer, transformer, processor)
         self.vae=vae
@@ -223,6 +224,6 @@ class model_factory():
         if model_mode == 0: return [], []
         preloadURLs = get_model_recursive_prop(model_type,  "preload_URLs")
         if len(preloadURLs) == 0: return [], []
-        return [os.path.join("ckpts", os.path.basename(preloadURLs[0]))] , [1]
+        return [ fl.locate_file(os.path.basename(preloadURLs[0]))] , [1]
 
 
