@@ -70,7 +70,7 @@ class family_handler:
         download_def  += [{
             "repoId" : "DeepBeepMeep/Wan2.1", 
             "sourceFolderList" :  ["mmaudio", ],
-            "fileList" : [ [ "v1-44.pth", "best_netG.pt"]]   
+            "fileList" : [ [ "v1-16.pth", "best_netG.pt"]]   
         }]
 
         return download_def
