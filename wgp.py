@@ -8,14 +8,10 @@ p = os.path.dirname(os.path.abspath(__file__))
 if p not in sys.path:
     sys.path.insert(0, p)
 import asyncio
-if os.name == "nt": 
+if os.name == "nt":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    import asyncio.proactor_events as _proactor
-    _orig_call_lost = _proactor._ProactorBasePipeTransport._call_connection_lost
-    def _quiet_call_lost(self, exc):
-        if isinstance(exc, ConnectionResetError): exc = None 
-        return _orig_call_lost(self, exc)
-    _proactor._ProactorBasePipeTransport._call_connection_lost = _quiet_call_lost    
+from shared.asyncio_utils import silence_proactor_connection_reset
+silence_proactor_connection_reset()
 import time
 import threading
 import argparse
@@ -82,7 +78,7 @@ global_queue_ref = []
 AUTOSAVE_FILENAME = "queue.zip"
 PROMPT_VARS_MAX = 10
 target_mmgp_version = "3.6.7"
-WanGP_version = "9.10"
+WanGP_version = "9.20"
 settings_version = 2.39
 max_source_video_frames = 3000
 prompt_enhancer_image_caption_model, prompt_enhancer_image_caption_processor, prompt_enhancer_llm_model, prompt_enhancer_llm_tokenizer = None, None, None, None
@@ -3278,8 +3274,11 @@ def load_models(model_type, override_profile = -1):
     if "transformer" in pipe:
         loras_transformer += ["transformer"]        
     if "transformer2" in pipe:
-        loras_transformer += ["transformer2"]        
-    offloadobj = offload.profile(pipe, profile_no= profile, compile = compile, quantizeTransformer = False, loras = loras_transformer, perc_reserved_mem_max = perc_reserved_mem_max , vram_safety_coefficient = vram_safety_coefficient , convertWeightsFloatTo = transformer_dtype, **kwargs)  
+        loras_transformer += ["transformer2"]
+    if len(compile) > 0 and hasattr(wan_model, "custom_compile"):
+        wan_model.custom_compile(backend= "inductor", mode ="default")
+    compile_modules = model_def.get("compile", compile) if len(compile) > 0 else ""
+    offloadobj = offload.profile(pipe, profile_no= profile, compile = compile_modules, quantizeTransformer = False, loras = loras_transformer, perc_reserved_mem_max = perc_reserved_mem_max , vram_safety_coefficient = vram_safety_coefficient , convertWeightsFloatTo = transformer_dtype, **kwargs)  
     if len(args.gpu) > 0:
         torch.set_default_device(args.gpu)
     transformer_type = model_type
@@ -8292,7 +8291,8 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                             label= video_prompt_type_video_mask_label , scale = 1, visible= "V" in video_prompt_type_value and not "U" in video_prompt_type_value and mask_preprocessing.get("visible", True), 
                             show_label= True,
                         )
-
+                        any_control_video = True
+                        any_control_image = image_outputs 
 
                     # Image Refs Selection
                     if image_ref_choices is None:

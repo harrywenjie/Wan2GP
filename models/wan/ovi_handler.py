@@ -55,6 +55,7 @@ class family_handler:
             "sliding_window": True,
             "sliding_window_size_locked": True,
             "sliding_window_defaults" : { "overlap_min" : 1, "overlap_max" : 1, "overlap_step": 0, "overlap_default": 1},
+            "compile":  ["transformer", "transformer2"]
         }
         cfg.update(model_def)
         return cfg

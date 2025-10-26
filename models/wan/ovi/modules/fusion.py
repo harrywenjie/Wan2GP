@@ -371,6 +371,5 @@ class FusionModel(nn.Module):
                     mod.weight.div_(10.0)
 
     
-    def set_rope_params(self):
-        self.video_model.set_rope_params()
-        self.audio_model.set_rope_params()
+    def custom_compile(self, compile_kwargs):
+        torch.compile(self.single_fusion_block_forward, **compile_kwargs)        

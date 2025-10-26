@@ -221,11 +221,7 @@ class OviFusionEngine:
         audio_freqs = self.model.audio_model.get_audio_rope_params()		
         video_noise = torch.randn((self.video_latent_channel, video_latent_length, video_latent_h, video_latent_w), device=self.device, dtype=self.target_dtype, generator=torch.Generator(device=self.device).manual_seed(seed))  # c, f, h, w
         audio_noise = torch.randn((audio_latent_length, self.audio_latent_channel), device=self.device, dtype=self.target_dtype, generator=torch.Generator(device=self.device).manual_seed(seed))  # 1, l c -> l, c
-        # self.model.audio_model.freqs=  self.model.audio_model.freqs.to("cuda")
-        # self.model.video_model.freqs=  self.model.video_model.freqs.to("cuda")
         def ret():
-            # self.model.audio_model.freqs=  self.model.audio_model.freqs.to("cpu")
-            # self.model.video_model.freqs=  self.model.video_model.freqs.to("cpu")
             return None
         
         # Calculate sequence lengths from actual latents
@@ -366,3 +362,7 @@ class OviFusionEngine:
             raise NotImplementedError("Unsupported solver.")
         
         return sample_scheduler, timesteps
+    
+    def custom_compile(self, **compile_kwargs):
+        self.model.custom_compile(compile_kwargs)
+

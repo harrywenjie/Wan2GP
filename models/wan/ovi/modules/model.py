@@ -42,44 +42,57 @@ def rope_params(max_seq_len, dim, theta=10000, freqs_scaling=1.0):
     freqs = torch.polar(torch.ones_like(freqs), freqs)
     return freqs
 
-# def rope_params(max_seq_len, dim, theta=10000, freqs_scaling=1.0, use_real = True):
-#     freqs = 1.0 / (
-#         theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim)
-#     )  # [D/2]
-#     # assert interpolation_factor == 1.0, f"interpolation_factor: {interpolation_factor}"
-#     freqs = torch.outer(pos * interpolation_factor, freqs)  # [S, D/2]
-#     if use_real:
-#         freqs_cos = freqs.cos().repeat_interleave(2, dim=1)  # [S, D]
-#         freqs_sin = freqs.sin().repeat_interleave(2, dim=1)  # [S, D]
-#         return freqs_cos, freqs_sin
-#     else:
-#         freqs_cis = torch.polar( torch.ones_like(freqs), freqs)  # complex64     # [S, D/2]
-#         return freqs_cis
+
+@amp.autocast('cuda', enabled=False)
+def rope_params_audio_real(max_seq_len, head_dim, rotary_dim, theta=10000, freqs_scaling=1.0):
+    assert rotary_dim % 2 == 0
+    assert rotary_dim <= head_dim
+    pos = torch.arange(max_seq_len, dtype=torch.float32)
+    base = torch.arange(0, rotary_dim, 2, dtype=torch.float32) / rotary_dim
+    inv_freq = freqs_scaling * torch.pow(theta, -base)
+    angles = torch.outer(pos, inv_freq)
+    cos = angles.cos().repeat_interleave(2, dim=1)
+    sin = angles.sin().repeat_interleave(2, dim=1)
+    if rotary_dim < head_dim:
+        pad = head_dim - rotary_dim
+        cos = torch.cat([cos, cos.new_ones(max_seq_len, pad)], dim=1)
+        sin = torch.cat([sin, sin.new_zeros(max_seq_len, pad)], dim=1)
+    return cos, sin
+
     
 @amp.autocast('cuda', enabled=False)
 def rope_apply_1d(x, grid_sizes, freqs):
-    n, c = x.size(2), x.size(3) // 2 ## b l h d
-    c_rope = freqs.shape[1]  # number of complex dims to rotate
-    assert c_rope <= c, "RoPE dimensions cannot exceed half of hidden size"
-    
-    # loop over samples
     output = []
-    for i, (l, ) in enumerate(grid_sizes.tolist()):
+    for i, (l,) in enumerate(grid_sizes.tolist()):
         seq_len = l
-        # precompute multipliers
-        x_i = torch.view_as_complex(x[i, :seq_len].to(torch.float64).reshape(
-            seq_len, n, -1, 2)) # [l n d//2]
-        x_i_rope = x_i[:, :, :c_rope] * freqs[:seq_len, None, :]  # [L, N, c_rope]
-        x_i_passthrough = x_i[:, :, c_rope:]  # untouched dims
-        x_i = torch.cat([x_i_rope, x_i_passthrough], dim=2)
-
-        # apply rotary embedding
-        x_i = torch.view_as_real(x_i).flatten(2)
-        x_i = torch.cat([x_i, x[i, seq_len:]])
-
-        # append to collection
-        output.append(x_i)
-    return torch.stack(output).bfloat16()
+        x_prefix = x[i, :seq_len]
+        if isinstance(freqs, tuple):
+            from ...modules.posemb_layers import apply_rotary_emb_single
+            cos_table, sin_table = freqs
+            cos_i = cos_table[:seq_len]
+            sin_i = sin_table[:seq_len]
+            rotated = apply_rotary_emb_single(
+                [x_prefix.unsqueeze(0)],
+                (cos_i, sin_i),
+                head_first=False,
+            ).squeeze(0)
+        else:
+            n, c = x.size(2), x.size(3) // 2
+            c_rope = freqs.shape[1]
+            assert c_rope <= c, "RoPE dimensions cannot exceed half of hidden size"
+            x_i = torch.view_as_complex(
+                x_prefix.to(torch.float64).reshape(seq_len, n, -1, 2)
+            )
+            x_i_rope = x_i[:, :, :c_rope] * freqs[:seq_len, None, :]
+            x_i_passthrough = x_i[:, :, c_rope:]
+            rotated = torch.view_as_real(
+                torch.cat([x_i_rope, x_i_passthrough], dim=2)
+            ).flatten(2)
+        rotated = rotated.to(x.dtype)
+        tail = x[i, seq_len:]
+        x_i_full = torch.cat([rotated, tail], dim=0)
+        output.append(x_i_full.to(x.dtype))
+    return torch.stack(output)
 
 @amp.autocast('cuda', enabled=False)
 def rope_apply_3d(x, grid_sizes, freqs):
@@ -113,17 +126,17 @@ def rope_apply_3d(x, grid_sizes, freqs):
 
 @amp.autocast('cuda', enabled=False)
 def rope_apply(x, grid_sizes, freqs):
+    x_ndim = grid_sizes.shape[-1]
     if isinstance(freqs, tuple):
+        if x_ndim == 1:
+            return rope_apply_1d(x, grid_sizes, freqs)
         from ...modules.posemb_layers import apply_rotary_emb_single
         qklist = [x]
         del x
         return apply_rotary_emb_single(qklist, freqs, head_first=False)
-    else:
-        x_ndim = grid_sizes.shape[-1]
-        if x_ndim == 3:
-            return rope_apply_3d(x, grid_sizes, freqs)
-        else:
-            return rope_apply_1d(x, grid_sizes, freqs)
+    if x_ndim == 3:
+        return rope_apply_3d(x, grid_sizes, freqs)
+    return rope_apply_1d(x, grid_sizes, freqs)
 
 
 
@@ -255,7 +268,7 @@ class WanSelfAttention(nn.Module):
             x(Tensor): Shape [B, L, C]
             seq_lens(Tensor): Shape [B]
             grid_sizes(Tensor): Shape [B, 3], the second dimension contains (F, H, W)
-            freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
+            freqs(Union[Tensor, Tuple[Tensor, Tensor]]): Rotary parameters
         """
         q, k, v = self.qkv_fn(x)
         q=rope_apply(q, grid_sizes, freqs)
@@ -603,7 +616,8 @@ class WanModel(ModelMixin, ConfigMixin):
         num_heads = self.num_heads
         assert (dim % num_heads) == 0 and (dim // num_heads) % 2 == 0
         d = dim // num_heads
-        return rope_params(1024, d - 4 * (d // 6), freqs_scaling=self.temporal_rope_scaling_factor)
+        rotary_dim = d - 4 * (d // 6)
+        return rope_params_audio_real(1024, d, rotary_dim, freqs_scaling=self.temporal_rope_scaling_factor)
 
     def set_rope_params(self):
         # buffers (don't use register_buffer otherwise dtype will be changed in to())
@@ -613,9 +627,8 @@ class WanModel(ModelMixin, ConfigMixin):
         d = dim // num_heads
 
         if self.is_audio_type:
-            ## to be determined
-            # self.freqs = rope_params(1024, d, freqs_scaling=temporal_rope_scaling_factor)
-            self.freqs = rope_params(1024, d - 4 * (d // 6), freqs_scaling=self.temporal_rope_scaling_factor)
+            rotary_dim = d - 4 * (d // 6)
+            self.freqs = rope_params_audio_real(1024, d, rotary_dim, freqs_scaling=self.temporal_rope_scaling_factor)
         else:
             self.freqs = torch.cat([
                 rope_params(1024, d - 4 * (d // 6)),
