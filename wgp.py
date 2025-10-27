@@ -78,7 +78,7 @@ global_queue_ref = []
 AUTOSAVE_FILENAME = "queue.zip"
 PROMPT_VARS_MAX = 10
 target_mmgp_version = "3.6.7"
-WanGP_version = "9.20"
+WanGP_version = "9.21"
 settings_version = 2.39
 max_source_video_frames = 3000
 prompt_enhancer_image_caption_model, prompt_enhancer_image_caption_processor, prompt_enhancer_llm_model, prompt_enhancer_llm_tokenizer = None, None, None, None
@@ -2034,7 +2034,7 @@ def get_lora_dir(model_type):
             lora_dir_1_3B = os.path.join(root_lora_dir, "1.3B")
             if os.path.isdir(lora_dir_1_3B ):
                 return lora_dir_1_3B
-        elif base_model_type == "ti2v_2_2":
+        elif base_model_type in ["ti2v_2_2", "ovi"]:
             lora_dir_5B = os.path.join(root_lora_dir, "5B")
             if os.path.isdir(lora_dir_5B ):
                 return lora_dir_5B
@@ -2097,7 +2097,7 @@ if not os.path.isfile(server_config_filename) and os.path.isfile("gradio_config.
 src_move = [ "models_clip_open-clip-xlm-roberta-large-vit-huge-14-bf16.safetensors", "models_t5_umt5-xxl-enc-bf16.safetensors", "models_t5_umt5-xxl-enc-quanto_int8.safetensors" ]
 tgt_move = [ "xlm-roberta-large", "umt5-xxl", "umt5-xxl"]
 for src,tgt in zip(src_move,tgt_move):
-    src = fl.locate_file(src)
+    src = fl.locate_file(src, error_if_none= False)
     tgt = fl.get_download_location(tgt)
     if src is not None:
         try:
@@ -2151,7 +2151,7 @@ for path in  ["wan2.1_Vace_1.3B_preview_bf16.safetensors", "sky_reels2_diffusion
 "wan2.1_Vace_14B_mbf16.safetensors", "wan2.1_Vace_14B_quanto_mbf16_int8.safetensors", "wan2.1_FLF2V_720p_14B_quanto_int8.safetensors", "wan2.1_FLF2V_720p_14B_bf16.safetensors",  "wan2.1_FLF2V_720p_14B_fp16.safetensors", "wan2.1_Vace_1.3B_mbf16.safetensors", "wan2.1_text2video_1.3B_bf16.safetensors",
 "ltxv_0.9.7_13B_dev_bf16.safetensors"
 ]:
-    if fl.locate_file(path) is not None:
+    if fl.locate_file(path, error_if_none= False) is not None:
         print(f"Removing old version of model '{path}'. A new version of this model will be downloaded next time you use it.")
         os.remove( fl.locate_file(path))
 
@@ -2828,7 +2828,7 @@ def get_local_model_filename(model_filename):
         local_model_filename =os.path.basename(model_filename)
     else:
         local_model_filename = model_filename
-    local_model_filename = fl.locate_file(local_model_filename)
+    local_model_filename = fl.locate_file(local_model_filename, error_if_none= False)
     return local_model_filename
     
 
@@ -2841,15 +2841,15 @@ def process_files_def(repoId = None, sourceFolderList = None, fileList = None, t
         if targetFolder is not None and len(targetFolder) == 0:  targetFolder = None
         targetRoot = os.path.join(original_targetRoot, targetFolder) if targetFolder is not None else original_targetRoot            
         if len(files)==0:
-            if fl.locate_folder(sourceFolder if targetFolder is None else os.path.join(targetFolder, sourceFolder) ) is None:
+            if fl.locate_folder(sourceFolder if targetFolder is None else os.path.join(targetFolder, sourceFolder), error_if_none= False ) is None:
                 snapshot_download(repo_id=repoId,  allow_patterns=sourceFolder +"/*", local_dir= targetRoot)
         else:
             for onefile in files:     
                 if len(sourceFolder) > 0: 
-                    if fl.locate_file( (sourceFolder + "/" + onefile)  if targetFolder is None else os.path.join(targetFolder, sourceFolder, onefile)) is None:   
+                    if fl.locate_file( (sourceFolder + "/" + onefile)  if targetFolder is None else os.path.join(targetFolder, sourceFolder, onefile), error_if_none= False) is None:   
                         hf_hub_download(repo_id=repoId,  filename=onefile, local_dir = targetRoot, subfolder=sourceFolder)
                 else:
-                    if fl.locate_file(onefile if targetFolder is None else os.path.join(targetFolder, onefile)) is None:          
+                    if fl.locate_file(onefile if targetFolder is None else os.path.join(targetFolder, onefile), error_if_none= False) is None:          
                         hf_hub_download(repo_id=repoId,  filename=onefile, local_dir = targetRoot)
 
 def download_mmaudio():
@@ -2963,7 +2963,7 @@ def download_models(model_filename = None, model_type= None, module_type = False
             preload_URLs = [get_model_filename(model_type=model_type, quantization= text_encoder_quantization, dtype_policy = transformer_dtype_policy, URLs=preload_URLs)] if len(preload_URLs) > 0 else []
 
         for url in preload_URLs:
-            filename = fl.locate_file(os.path.basename(url))
+            filename = fl.locate_file(os.path.basename(url), error_if_none= False)
             if filename is None: 
                 filename = fl.get_download_location(os.path.basename(url))
                 if not url.startswith("http"):
@@ -4987,16 +4987,21 @@ def generate_video(
         if len(errors) > 0 : raise gr.Error(errors)
         loras_selected += [ os.path.join(lora_dir, os.path.basename(lora)) for lora in activated_loras]
 
+    if hasattr(wan_model, "get_trans_lora"):
+        trans_lora, trans2_lora = wan_model.get_trans_lora()
+    else:     
+        trans_lora, trans2_lora = trans, trans2
+
     if len(loras_selected) > 0:
         pinnedLora = loaded_profile !=5  # and transformer_loras_filenames == None False # # # 
         split_linear_modules_map = getattr(trans,"split_linear_modules_map", None)
-        offload.load_loras_into_model(trans , loras_selected, loras_list_mult_choices_nums, activate_all_loras=True, preprocess_sd=get_loras_preprocessor(trans, base_model_type), pinnedLora=pinnedLora, split_linear_modules_map = split_linear_modules_map) 
-        errors = trans._loras_errors
+        offload.load_loras_into_model(trans_lora, loras_selected, loras_list_mult_choices_nums, activate_all_loras=True, preprocess_sd=get_loras_preprocessor(trans, base_model_type), pinnedLora=pinnedLora, split_linear_modules_map = split_linear_modules_map) 
+        errors = trans_lora._loras_errors
         if len(errors) > 0:
             error_files = [msg for _ ,  msg  in errors]
             raise gr.Error("Error while loading Loras: " + ", ".join(error_files))
-        if trans2 is not None: 
-            offload.sync_models_loras(trans, trans2)
+        if trans2_lora is not None: 
+            offload.sync_models_loras(trans_lora, trans2_lora)
         
     seed = None if seed == -1 else seed
     # negative_prompt = "" # not applicable in the inference
@@ -5600,10 +5605,11 @@ def generate_video(
                 clear_gen_cache()
                 offloadobj.unload_all()
                 trans.cache = None 
-                offload.unload_loras_from_model(trans)
                 if trans2 is not None: 
                     trans2.cache = None 
-                    offload.unload_loras_from_model(trans2)
+                offload.unload_loras_from_model(trans_lora)
+                if trans2_lora is not None: 
+                    offload.unload_loras_from_model(trans2_lora)
                 skip_steps_cache = None
                 # if compile:
                 #     cache_size = torch._dynamo.config.cache_size_limit                                      
@@ -5848,11 +5854,13 @@ def generate_video(
         seed = set_seed(-1)
     clear_status(state)
     trans.cache = None
-    offload.unload_loras_from_model(trans)
-    if not trans2 is None:
-        trans2.cache = None
-        offload.unload_loras_from_model(trans2)
+    offload.unload_loras_from_model(trans_lora)
+    if not trans2_lora is None:
+        offload.unload_loras_from_model(trans2_lora)
 
+    if not trans2 is None:
+       trans2.cache = None
+ 
     if len(control_audio_tracks) > 0 or len(source_audio_tracks) > 0:
         cleanup_temp_audio_files(control_audio_tracks + source_audio_tracks)
 
