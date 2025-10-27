@@ -2155,7 +2155,7 @@ for path in  ["wan2.1_Vace_1.3B_preview_bf16.safetensors", "sky_reels2_diffusion
         print(f"Removing old version of model '{path}'. A new version of this model will be downloaded next time you use it.")
         os.remove( fl.locate_file(path))
 
-for f, s in [(fl.locate_file("Florence2/modeling_florence2.py"), 127287)]:
+for f, s in [(fl.locate_file("Florence2/modeling_florence2.py", error_if_none= False), 127287)]:
     try:
         if os.path.isfile(f) and os.path.getsize(f) == s:
             print(f"Removing old version of model '{f}'. A new version of this model will be downloaded next time you use it.")
