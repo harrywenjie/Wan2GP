@@ -1,3 +1,10 @@
+--find-links https://download.pytorch.org/whl/torch/
+--find-links https://download.pytorch.org/whl/torchvision/
+--find-links https://download.pytorch.org/whl/torchaudio/
+torch==2.8.0+cu129
+torchvision==0.23.0+cu129
+torchaudio==2.8.0+cu129
+
 # Core AI stack
 diffusers==0.34.0
 transformers==4.53.1
