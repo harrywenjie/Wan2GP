@@ -1,226 +1,114 @@
---vace-1-3B--vace-1-3B# Command Line Reference
+# Command Line Interface
 
-This document covers all available command line options for WanGP.
+Wan2GP now ships with dedicated headless entry points for generation and preprocessing workflows:
 
-## Basic Usage
+- `python -m cli.generate` – wraps the video-generation routines from `wgp.py` while exposing reproducible CLI flags.
+- `python -m cli.matanyone` – runs the MatAnyOne mask propagation pipeline against on-disk media.
 
-```bash
-# Default launch 
-python wgp.py
+## Video Generation (`cli.generate`)
 
-# Specific model modes
-python wgp.py --i2v           # Image-to-video
-python wgp.py --t2v           # Text-to-video (default)
-python wgp.py --t2v-14B       # 14B text-to-video model
-python wgp.py --t2v-1-3B      # 1.3B text-to-video model
-python wgp.py --i2v-14B       # 14B image-to-video model
-python wgp.py --i2v-1-3B      # Fun InP 1.3B image-to-video model
-python wgp.py --vace-1-3B     # VACE ControlNet 1.3B model
+`python -m cli.generate` is the primary gateway into Wan2GP's diffusion pipelines. It wraps the existing generation routines from `wgp.py` but exposes them with explicit, reproducible CLI flags.
+
+```
+python -m cli.generate \
+  --prompt "dawn breaking over a neon coastline, wide aerial shot" \
+  --model-type t2v \
+  --frames 120 \
+  --guidance-scale 6.5 \
+  --output-dir outputs/sunrise
 ```
 
-## Model and Performance Options
+### Required Argument
+- `--prompt TEXT` – the primary text prompt. Blank prompts are rejected.
 
-### Model Configuration
-```bash
---quantize-transformer BOOL   # Enable/disable transformer quantization (default: True)
---compile                     # Enable PyTorch compilation (requires Triton)
---attention MODE              # Force attention mode: sdpa, flash, sage, sage2
---profile NUMBER              # Performance profile 1-5 (default: 4)
---preload NUMBER              # Preload N MB of diffusion model in VRAM
---fp16                        # Force fp16 instead of bf16 models
---gpu DEVICE                  # Run on specific GPU device (e.g., "cuda:1")
+### Prompt & Sampling Controls
+- `--negative-prompt TEXT` – optional negative prompt; falls back to preset defaults when omitted.
+- `--model-type NAME` – pipeline selector (`t2v`, `i2v_2_2`, etc.). The current defaults match the legacy UI model dropdowns.
+- `--frames INT` – output length in frames. Defaults come from model presets.
+- `--steps INT` – denoising steps; leave unset to reuse preset values.
+- `--guidance-scale FLOAT` – sets all CFG guidance scales uniformly.
+- `--seed INT` – fixed seed for deterministic runs. Use `-1` to request a random seed from the pipeline.
+- `--force-fps {auto,control,source,INT}` – override the output frame rate or reuse preset behaviour.
+
+### File-Based Inputs
+Every path must reference an existing file; the CLI validates before execution.
+- `--image-start PATH` – kick-off image for i2v workflows.
+- `--image-end PATH` – ending reference frame.
+- `--image-ref PATH` – repeatable flag for additional reference images.
+- `--video-source PATH` – source video to extend or edit.
+- `--video-guide PATH` – motion/style guide video.
+- `--video-mask PATH` / `--image-mask PATH` – masks that constrain edits.
+- `--image-guide PATH` – conditioning image.
+- `--audio-guide PATH`, `--audio-guide2 PATH` – audio conditioning tracks.
+- `--audio-source PATH` – original audio to preserve or remix.
+
+### Output Control
+- `--output-dir PATH` – directory where rendered assets are written. When omitted the generator uses the configured default (`save_path` inside `wgp.py`).
+
+### Runtime Controls
+- `--attention {auto,sdpa,sage,sage2,flash,xformers}` – select the attention backend; falls back to the configured default when omitted.
+- `--compile` – enable the torch.compile transformer path (equivalent to setting `server_config["compile"]` to `"transformer"`).
+- `--profile INT` – override the VRAM/profile budget used during model initialisation (matches the legacy profile dropdown).
+- `--preload INT` – preload diffusion weights into VRAM (in megabytes). Use `0` to rely on profile defaults.
+- `--fp16` / `--bf16` – force the transformer weights to the requested dtype for this run. Only one may be active at a time.
+- `--transformer-quantization TEXT` – override transformer quantisation (e.g. `int8`, `fp8`, `none` for full precision).
+- `--text-encoder-quantization TEXT` – override text encoder quantisation.
+- `--tea-cache-level FLOAT` – enable TeaCache skipping with the provided multiplier (>0).
+- `--tea-cache-start-perc FLOAT` – start TeaCache skipping at the provided percentage of the denoising schedule. Requires `--tea-cache-level`.
+
+### Logging & Utility Flags
+- `--log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}` – adjust CLI logging verbosity (default `INFO`).
+- `--dry-run` – resolve configuration, print the derived parameters, and exit without generating frames. Use this to validate arguments, file discovery, and preset merges.
+
+### Execution Flow
+1. The CLI parser gathers arguments (see `cli/arguments.py`).
+2. File inputs are expanded and validated. Missing or non-file paths terminate the run with clear errors.
+3. `wgp.py` is imported to reuse model loading, preset assembly, and queue management logic.
+4. The command constructs a lightweight state object and forwards parameters into `wgp.generate_video`.
+5. Progress, status, and output notifications are logged to the terminal. The final output path is echoed on success.
+
+### Tips
+- Treat `--dry-run` as your first step for any new command to ensure paths and overrides resolve correctly.
+- Use dedicated output directories (`--output-dir`) when batching experiments so results are easy to compare.
+- Combine shell scripts or job schedulers with the CLI to queue repeatable generations—no plugin hooks or UI callbacks remain.
+
+## MatAnyOne Mask Propagation (`cli.matanyone`)
+
+`python -m cli.matanyone` runs the headless MatAnyOne mask propagation pipeline. It accepts a source video or image plus a template mask and emits foreground/alpha MP4s (with optional RGBA archives for compositing workflows).
+
+```
+python -m cli.matanyone \
+  --input assets/demo.mp4 \
+  --template-mask assets/demo_mask.png \
+  --output-dir mask_outputs/demo \
+  --mask-type greenscreen \
+  --dry-run
 ```
 
-### Performance Profiles
-- **Profile 1**: Load entire current model in VRAM and keep all unused models in reserved RAM for fast VRAM tranfers 
-- **Profile 2**: Load model parts as needed, keep all unused models in reserved RAM for fast VRAM tranfers
-- **Profile 3**: Load entire current model in VRAM (requires 24GB for 14B model)
-- **Profile 4**: Default and recommended, load model parts as needed, most flexible option
-- **Profile 5**: Minimum RAM usage
+### Required Arguments
+- `--input PATH` – source media file (video or still image). The CLI validates existence and type before continuing.
+- `--template-mask PATH` – grayscale template mask aligned to the first processed frame.
 
-### Memory Management
-```bash
---perc-reserved-mem-max FLOAT # Max percentage of RAM for reserved memory (< 0.5)
-```
+### Optional Controls
+- `--output-dir PATH` – destination directory for generated assets (defaults to `mask_outputs/`).
+- `--start-frame INT` / `--end-frame INT` – clamp the processed frame window (end is exclusive; omit to process the full clip).
+- `--new-dim SPEC` – resize directive understood by the MatAnyOne pipeline (e.g. `1080p outer`).
+- `--matting {foreground,background}` – choose whether the mask represents the foreground (default) or background region.
+- `--mask-type {wangp,greenscreen,alpha}` – select the output format: raw mask pair, composited greenscreen, or RGBA ZIP bundle.
+- `--erode-kernel INT` / `--dilate-kernel INT` – morphology kernel sizes to refine the mask.
+- `--warmup-frames INT` – warm-up frame count for stabilising propagation (default `10`).
+- `--device TEXT` – execution device (e.g. `cuda`, `cuda:1`, `cpu`).
+- `--codec TEXT` – FFmpeg codec string used when writing MP4 outputs (default `libx264_8`).
+- `--no-audio` – skip audio track reattachment when the source includes audio.
 
-## Lora Configuration
+### Logging & Dry Runs
+- `--log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}` – matches the generation CLI logger configuration.
+- `--dry-run` – validate paths, construct the propagation request, log the resolved configuration, and exit without running the model.
 
-```bash
---lora-dir PATH              # Path to Wan t2v loras directory
---lora-dir-i2v PATH          # Path to Wan i2v loras directory
---lora-dir-hunyuan PATH      # Path to Hunyuan t2v loras directory
---lora-dir-hunyuan-i2v PATH  # Path to Hunyuan i2v loras directory
---lora-dir-ltxv PATH         # Path to LTX Video loras directory
---lora-preset PRESET         # Load lora preset file (.lset) on startup
---check-loras                # Filter incompatible loras (slower startup)
-```
+### Outputs
+Successful runs log the written file paths and echo them to STDOUT. Expect:
+- Foreground MP4 (`<prefix>.mp4`)
+- Alpha MP4 (`<prefix>_alpha.mp4`)
+- Optional RGBA ZIP archive when `--mask-type alpha` is selected.
 
-## Generation Settings
-
-### Basic Generation
-```bash
---seed NUMBER                # Set default seed value
---frames NUMBER              # Set default number of frames to generate
---steps NUMBER               # Set default number of denoising steps
---advanced                   # Launch with advanced mode enabled
-```
-
-### Advanced Generation
-```bash
---teacache MULTIPLIER        # TeaCache speed multiplier: 0, 1.5, 1.75, 2.0, 2.25, 2.5
-```
-
-## Interface and Server Options
-
-### Server Configuration
-```bash
---server-port PORT           # Gradio server port (default: 7860)
---server-name NAME           # Gradio server name (default: localhost)
---listen                     # Make server accessible on network
---share                      # Create shareable HuggingFace URL for remote access
---open-browser               # Open browser automatically when launching
-```
-
-### Interface Options
-```bash
---lock-config                # Prevent modifying video engine configuration from interface
---theme THEME_NAME           # UI theme: "default" or "gradio"
-```
-
-## File and Directory Options
-
-```bash
---settings PATH              # Path to folder containing default settings for all models
---verbose LEVEL              # Information level 0-2 (default: 1)
-```
-
-## Examples
-
-### Basic Usage Examples
-```bash
-# Launch with specific model and loras
-python wgp.py --t2v-14B --lora-preset mystyle.lset
-
-# High-performance setup with compilation
-python wgp.py --compile --attention sage2 --profile 3
-
-# Low VRAM setup
-python wgp.py --t2v-1-3B --profile 4 --attention sdpa
-
-# Multiple images with custom lora directory
-python wgp.py --i2v --multiple-images --lora-dir /path/to/shared/loras
-```
-
-### Server Configuration Examples
-```bash
-# Network accessible server
-python wgp.py --listen --server-port 8080
-
-# Shareable server with custom theme
-python wgp.py --share --theme gradio --open-browser
-
-# Locked configuration for public use
-python wgp.py --lock-config --share
-```
-
-### Advanced Performance Examples
-```bash
-# Maximum performance (requires high-end GPU)
-python wgp.py --compile --attention sage2 --profile 3 --preload 2000
-
-# Optimized for RTX 2080Ti
-python wgp.py --profile 4 --attention sdpa --teacache 2.0
-
-# Memory-efficient setup
-python wgp.py --fp16 --profile 4 --perc-reserved-mem-max 0.3
-```
-
-### TeaCache Configuration
-```bash
-# Different speed multipliers
-python wgp.py --teacache 1.5   # 1.5x speed, minimal quality loss
-python wgp.py --teacache 2.0   # 2x speed, some quality loss
-python wgp.py --teacache 2.5   # 2.5x speed, noticeable quality loss
-python wgp.py --teacache 0     # Disable TeaCache
-```
-
-## Attention Modes
-
-### SDPA (Default)
-```bash
-python wgp.py --attention sdpa
-```
-- Available by default with PyTorch
-- Good compatibility with all GPUs
-- Moderate performance
-
-### Sage Attention
-```bash
-python wgp.py --attention sage
-```
-- Requires Triton installation
-- 30% faster than SDPA
-- Small quality cost
-
-### Sage2 Attention
-```bash
-python wgp.py --attention sage2
-```
-- Requires Triton and SageAttention 2.x
-- 40% faster than SDPA
-- Best performance option
-
-### Flash Attention
-```bash
-python wgp.py --attention flash
-```
-- May require CUDA kernel compilation
-- Good performance
-- Can be complex to install on Windows
-
-## Troubleshooting Command Lines
-
-### Fallback to Basic Setup
-```bash
-# If advanced features don't work
-python wgp.py --attention sdpa --profile 4 --fp16
-```
-
-### Debug Mode
-```bash
-# Maximum verbosity for troubleshooting
-python wgp.py --verbose 2 --check-loras
-```
-
-### Memory Issue Debugging
-```bash
-# Minimal memory usage
-python wgp.py --profile 4 --attention sdpa --perc-reserved-mem-max 0.2
-```
-
-
-
-## Configuration Files
-
-### Settings Files
-Load custom settings:
-```bash
-python wgp.py --settings /path/to/settings/folder
-```
-
-### Lora Presets
-Create and share lora configurations:
-```bash
-# Load specific preset
-python wgp.py --lora-preset anime_style.lset
-
-# With custom lora directory
-python wgp.py --lora-preset mystyle.lset --lora-dir /shared/loras
-```
-
-## Environment Variables
-
-While not command line options, these environment variables can affect behavior:
-- `CUDA_VISIBLE_DEVICES` - Limit visible GPUs
-- `PYTORCH_CUDA_ALLOC_CONF` - CUDA memory allocation settings
-- `TRITON_CACHE_DIR` - Triton cache directory (for Sage attention) 
+For architectural notes and migration history consult `PROJECT_PLAN_LIVE.md`.

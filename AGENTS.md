@@ -1,27 +1,54 @@
-# Repository Guidelines
+# Agent Workflow
 
-## Project Structure & Module Organization
-WanGP centers on `wgp.py`, the Gradio app that orchestrates GPU profiles, model loading, and queue control. Cross-cutting helpers live in `shared/`; extend those modules rather than reimplementing utilities inside features. Model defaults and VRAM presets belong in `defaults/` and `profiles/`, while preprocessing and postprocessing stages stay in their respective folders or `extract_source_images.py`. Keep downloadable weights in `loras*/`, `finetunes/`, and `models/`, and document user-facing changes in `docs/` so the UI, CLI, and Docker notes stay aligned.
+## Mission
+Transform **Wan2GP** into a **lean, headless, command-line video generator**.  
+All actions should move the codebase toward minimalism, reproducibility, and deterministic CLI operation.
 
-## Build, Test, and Development Commands
-Create a reproducible environment before editing:
-```bash
-conda create -n wan2gp python=3.10.9
-conda activate wan2gp
-pip install torch==2.8.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/test/cu128
-pip install -r requirements.txt
-python wgp.py
-```
-`python wgp.py` serves the local UI; append `--share`, `--debug-gen-form`, or `--betatest` when you need remote demos, UI timing, or experimental toggles. Debian-based owners can run `./run-docker-cuda-deb.sh` for a reproducible CUDA + SageAttention stack that auto-detects VRAM and launches the containerized app.
+### Core Directives
+- Remove **Gradio** and all GUI-related dependencies; no legacy UI layers should remain.
+- Retire **Docker-specific tooling** and documentation in favor of direct CLI workflows.
+- Adopt **deliberate removals**: stage proposals and rationales in `PROJECT_PLAN_LIVE.md` before execution.
 
-## Coding Style & Naming Conventions
-Write Python 3.10 code with four-space indents and Black-compatible formatting. Use snake_case for functions and modules, PascalCase for classes, and keep side effects behind `if __name__ == "__main__":` in any new CLIs. Co-locate constants with the existing `WanGP_version` block, and keep config keys (`plugins.json`, `defaults/*.json`) lowercase with hyphenated identifiers.
+---
 
-## Testing Guidelines
-There is no automated test suite yet, so rely on scenario-driven validation. Run `python wgp.py --save-masks` or `--save-speakers` to capture intermediates when touching video or audio stages, and queue multiple jobs to exercise `shared/utils/process_locks.py`. Document GPU model, VRAM profile, prompt, and outputs in your PR so reviewers can replay regressions quickly.
+## Daily Operation
+- At session start, read `PROJECT_PLAN_LIVE.md`:
+  - Review `## Previous Work Summary` for recent changes.
+  - Review `## Immediate Next Actions` for current tasks.
+  - Explore relevant parts of the codebase to rebuild working context.
+- Record new insights or architectural notes in `## Context And Findings`.
+- Discuss design decisions (architecture, dependency pruning, model coverage) before major edits.
+- When refactoring or removing code, preserve debuggability through logging or CLI flags.
 
-## Commit & Pull Request Guidelines
-History favors short, present-tense subjects (`added loras accelerators for Ovi`, `fixed locator`). Squash noisy checkpoints locally, mention the main modules touched in the body, and update `docs/CHANGELOG.md` whenever you alter UX or model coverage. PRs should outline intent, list required assets/weights, link issues, and attach screenshots or clips that show the behavior change.
+---
 
-## Security & Configuration Tips
-Do not commit model checkpoints, API tokens, or user-generated media. Respect user-configurable paths such as `--lora-dir` / `--lora-dir-i2v` instead of hard-coding folders, and record new environment variables in `README.md` or `docs/INSTALLATION.md`. Follow `docs/PLUGINS.md` when publishing plugins and remind testers to use `--lock-config` or `--lock-model` whenever workflows should avoid mutating operator settings.
+## Environment Setup
+- The **human operator** prepares and activates the project `venv` before execution.
+- Assume all required dependencies are installed; do **not** install or upgrade packages yourself.
+- If you encounter a missing or incompatible dependency, **notify the operator** instead of attempting installation.
+
+---
+
+## Code & Development Standards
+- Decouple runtime orchestration from presentation remnants:
+  - Move queue management, scheduling, and I/O into CLI modules (`cli/`).
+  - Delete Gradio helpers (`shared/gradio`, plugins, web assets`).
+  - Replace UI calls with structured logging, progress output, or exceptions.
+- Keep model weights, presets, and defaults in their current directories, but **expose them via CLI flags** rather than UI configs.
+- Prefer **pure-Python adapters**; guard GPU-accelerated ops behind capability checks.
+- Comment concisely — explain **intent**, not syntax. Focus on non-obvious control flow (scheduler handoffs, precision transitions, etc.).
+- Ensure all modules run cleanly **without** environment variables or assumptions from the legacy UI layer.
+- Maintain idempotent entry points (`cli/generate.py`) for testing and automation.
+
+---
+
+## Validation
+- Follow the live validation guidance documented in `PROJECT_PLAN_LIVE.md` (see `## Validation Expectations`) and record outcomes under **`## Previous Work Summary`**.
+- Add minimal validation scripts only when necessary; remove them once higher-level automation exists.
+
+---
+
+## Documentation & Communication
+- Treat `PROJECT_PLAN_LIVE.md` as the authoritative session log; use `README.md` and `docs/*` (e.g. `docs/CLI.md`, `docs/APPENDIX_HEADLESS.md`) as the current headless CLI references and update them when workflows change.
+- Follow `## Handoff Protocol` in `PROJECT_PLAN_LIVE.md` for both task execution and documentation.
+- Keep sensitive artifacts (weights, media, tokens) **out of version control**; document required paths and environment variables explicitly.

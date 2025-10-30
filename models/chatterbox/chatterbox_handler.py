@@ -1,5 +1,5 @@
 from shared.utils import files_locator as fl
-import gradio as gr
+from shared.utils.notifications import notify_info
 try:
     from .mtl_tts import SUPPORTED_LANGUAGES as _SUPPORTED_LANGUAGES
 except ImportError:  # pragma: no cover - fallback when package missing during startup
@@ -142,4 +142,4 @@ class family_handler:
     @staticmethod
     def validate_generative_prompt(base_model_type, model_def, inputs, one_prompt):
         if len(one_prompt) > 300:
-            gr.Info("It is recommended to use a prompt that has less than 300 characters, otherwise you may get unexpected results.")
+            notify_info("It is recommended to use a prompt shorter than 300 characters to avoid unexpected results.")

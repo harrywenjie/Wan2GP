@@ -1,7 +1,7 @@
 import torch
 import numpy as np
-import gradio as gr
 from shared.utils import files_locator as fl 
+from shared.utils.notifications import notify_warning
 
 def test_vace(base_model_type):
     return base_model_type in ["vace_14B", "vace_14B_2_2", "vace_1.3B", "vace_multitalk_14B", "vace_standin_14B", "vace_lynx_14B", "vace_ditto_14B"]     
@@ -699,5 +699,5 @@ class family_handler():
             image_refs = inputs["image_refs"]
             video_prompt_type = inputs["video_prompt_type"]
             if image_refs is not None and len(image_refs) == 1 and "K" in video_prompt_type:
-                gr.Info("Warning, Ref Image that contains the Face to transfer is Missing: if 'Landscape and then People or Objects' is selected beside the Landscape Image Ref there should be another Image Ref that contains a Face.")
+                notify_warning("Ref Image that contains the Face to transfer is missing: when selecting 'Landscape and then People or Objects' alongside a Landscape Image Ref, include another Image Ref containing a Face.")
                     

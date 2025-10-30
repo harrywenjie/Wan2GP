@@ -1,6 +1,6 @@
 import torch
-import gradio as gr
 from shared.utils import files_locator as fl 
+from shared.utils.notifications import notify_info
 
 
 def get_qwen_text_encoder_filename(text_encoder_quantization):
@@ -141,7 +141,7 @@ class family_handler():
             outpainting_dims = get_outpainting_dims(video_guide_outpainting)
 
             if denoising_strength < 1 and model_mode == 1:
-                gr.Info("Denoising Strength will be ignored while using Lora Inpainting")
+                notify_info("Denoising Strength will be ignored while using Lora Inpainting.")
             if outpainting_dims is not None and model_mode == 0 :
                 return "Outpainting is not supported with Masked Denoising"
             

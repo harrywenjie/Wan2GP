@@ -1,0 +1,234 @@
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+from typing import Iterable, Optional
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Headless entry point for Wan2GP video generation."
+    )
+    parser.add_argument(
+        "--prompt",
+        required=True,
+        help="Primary text prompt used to drive generation.",
+    )
+    parser.add_argument(
+        "--negative-prompt",
+        default=None,
+        help="Optional negative prompt; falls back to preset defaults when omitted.",
+    )
+    parser.add_argument(
+        "--model-type",
+        default="t2v",
+        help="Model identifier (e.g. t2v, i2v_2_2).",
+    )
+    parser.add_argument(
+        "--resolution",
+        default=None,
+        help="Override output resolution (e.g. 832x480). Uses preset defaults when omitted.",
+    )
+    parser.add_argument(
+        "--frames",
+        type=int,
+        default=None,
+        help="Total output frames. Uses preset defaults when omitted.",
+    )
+    parser.add_argument(
+        "--steps",
+        type=int,
+        default=None,
+        help="Number of denoising steps. Uses preset defaults when omitted.",
+    )
+    parser.add_argument(
+        "--guidance-scale",
+        type=float,
+        default=None,
+        help="CFG guidance scale applied uniformly across phases.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed to reproduce runs (-1 triggers randomized seeds).",
+    )
+    parser.add_argument(
+        "--force-fps",
+        default=None,
+        help="Override output FPS (auto, control, source, or explicit integer).",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Destination directory for generated assets. Defaults to configured outputs/.",
+    )
+    parser.add_argument(
+        "--image-start",
+        type=Path,
+        default=None,
+        help="Path to a start/reference image for i2v workflows.",
+    )
+    parser.add_argument(
+        "--image-end",
+        type=Path,
+        default=None,
+        help="Path to an ending reference image.",
+    )
+    parser.add_argument(
+        "--image-ref",
+        dest="image_refs",
+        action="append",
+        type=Path,
+        default=None,
+        help="Additional reference image. Repeat to provide multiple images.",
+    )
+    parser.add_argument(
+        "--video-source",
+        type=Path,
+        default=None,
+        help="Source video to extend or edit.",
+    )
+    parser.add_argument(
+        "--video-guide",
+        type=Path,
+        default=None,
+        help="Guidance video used for motion or style transfer.",
+    )
+    parser.add_argument(
+        "--image-guide",
+        type=Path,
+        default=None,
+        help="Guidance image used for conditioning.",
+    )
+    parser.add_argument(
+        "--video-mask",
+        type=Path,
+        default=None,
+        help="Path to a video mask to constrain edits.",
+    )
+    parser.add_argument(
+        "--image-mask",
+        type=Path,
+        default=None,
+        help="Path to an image mask used for static conditioning.",
+    )
+    parser.add_argument(
+        "--audio-guide",
+        type=Path,
+        default=None,
+        help="Audio conditioning track.",
+    )
+    parser.add_argument(
+        "--audio-guide2",
+        type=Path,
+        default=None,
+        help="Secondary audio conditioning track.",
+    )
+    parser.add_argument(
+        "--audio-source",
+        type=Path,
+        default=None,
+        help="Source audio track for edit workflows.",
+    )
+    parser.add_argument(
+        "--log-level",
+        choices=["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"],
+        default="INFO",
+        help="Logging verbosity for CLI telemetry output.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the resolved configuration without starting generation.",
+    )
+    parser.add_argument(
+        "--attention",
+        choices=["auto", "sdpa", "sage", "sage2", "flash", "xformers"],
+        default=None,
+        help="Select the attention backend; falls back to server_config when omitted.",
+    )
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="Enable the torch.compile transformer path defined in server_config['compile'].",
+    )
+    parser.add_argument(
+        "--profile",
+        type=int,
+        default=None,
+        help="Override the VRAM/profile budget used during model initialisation.",
+    )
+    parser.add_argument(
+        "--preload",
+        type=int,
+        default=None,
+        help="Megabytes of diffusion weights to preload into VRAM (0 disables preloading).",
+    )
+    dtype_group = parser.add_mutually_exclusive_group()
+    dtype_group.add_argument(
+        "--fp16",
+        action="store_true",
+        help="Force fp16 transformer weights (overrides server_config['transformer_dtype_policy']).",
+    )
+    dtype_group.add_argument(
+        "--bf16",
+        action="store_true",
+        help="Force bf16 transformer weights (overrides server_config['transformer_dtype_policy']).",
+    )
+    parser.add_argument(
+        "--transformer-quantization",
+        default=None,
+        help="Override transformer quantisation choice (e.g. int8, fp8, none).",
+    )
+    parser.add_argument(
+        "--text-encoder-quantization",
+        default=None,
+        help="Override text encoder quantisation choice (e.g. int8, fp8, none).",
+    )
+    parser.add_argument(
+        "--tea-cache-level",
+        type=float,
+        default=None,
+        help="Enable TeaCache by specifying a multiplier (>0 activates skip-step caching).",
+    )
+    parser.add_argument(
+        "--tea-cache-start-perc",
+        type=float,
+        default=None,
+        help="Percentage of the denoising schedule to apply TeaCache skipping from (0-100).",
+    )
+    parser.add_argument(
+        "--list-loras",
+        action="store_true",
+        help="List available LoRA weights for the selected model type and exit.",
+    )
+    parser.add_argument(
+        "--list-lora-presets",
+        action="store_true",
+        help="List available LoRA presets/settings for the selected model type and exit.",
+    )
+    parser.add_argument(
+        "--loras",
+        dest="loras",
+        action="append",
+        default=None,
+        help="Activate a LoRA by file name. Repeat to enable multiple LoRAs.",
+    )
+    parser.add_argument(
+        "--lora-preset",
+        default=None,
+        help="Apply a LoRA preset (.lset or .json) from the model's LoRA directory.",
+    )
+    parser.add_argument(
+        "--lora-multipliers",
+        default=None,
+        help="Override the LoRA multipliers string. Accepts the same syntax as legacy UI presets.",
+    )
+    return parser
+
+
+def parse_cli_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
+    parser = build_parser()
+    return parser.parse_args(argv)

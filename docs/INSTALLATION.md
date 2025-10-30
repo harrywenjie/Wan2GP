@@ -1,118 +1,45 @@
-# Installation Guide
+# Installation Guide (Headless Build)
 
-This guide covers installation for different GPU generations and operating systems.
+Wan2GP now targets a direct Python workflow. The legacy Docker images, Pinokio bundles, and Gradio launch scripts are no longer maintained. Follow the steps below to prepare a local environment that can execute the CLI entry point.
 
-## Requirements
+## Prerequisites
+- **Python**: 3.10.x (preferred) or 3.11.x with a matching toolchain (venv, pip).  
+- **GPU**: CUDA- or ROCm-capable device with drivers configured by the operating system.  
+- **Git**: for cloning and keeping the repository up to date.  
+- **PyTorch**: install a build that matches your GPU stack (CUDA/ROCm). Refer to the official [PyTorch installation selector](https://pytorch.org/get-started/locally/) for the correct command.
 
-- Python 3.10.9
-- Conda or Python venv
-- Compatible GPU (RTX 10XX or newer recommended)
+> The project assumes the operator provisions a virtual environment and installs dependencies before running any CLI command. If you encounter missing packages, resolve them in the environment rather than modifying project files.
 
-## Installation for RTX 10XX to RTX 50XX (Stable)
-
-This installation uses PyTorch 2.8.0 which is well-tested and stable.
-
-### Step 1: Download and Setup Environment
-
-```shell
-# Clone the repository
+## Step-by-Step Setup
+```bash
+# 1. Clone the repository
 git clone https://github.com/deepbeepmeep/Wan2GP.git
 cd Wan2GP
 
-# Create Python 3.10.9 environment using conda
-conda create -n wan2gp python=3.10.9
-conda activate wan2gp
-```
+# 2. Create and activate a virtual environment (example using venv)
+python3 -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
-### Step 2: Install PyTorch
+# 3. Install PyTorch that matches your GPU/driver combination
+# (See https://pytorch.org/get-started/locally/ for the correct wheel)
+pip install torch torchvision torchaudio --index-url <appropriate-wheel-index>
 
-```shell
-# Install PyTorch 2.8.0 with CUDA 12.8
-pip install torch==2.8.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/test/cu128
-```
-
-### Step 3: Install Dependencies
-
-```shell
-# Install core dependencies
+# 4. Install Wan2GP Python dependencies
 pip install -r requirements.txt
 ```
 
-### Step 4: Optional Performance Optimizations
+## Verify the Installation
+Run a dry-run generation to confirm that `cli.generate` resolves presets, discovers media paths, and writes logs:
 
-#### Sage Attention (30% faster), don't install with RTX 50xx as it is not compatible
-
-```shell
-# Windows only: Install Triton
-pip install triton-windows 
-
-# For both Windows and Linux
-pip install sageattention==1.0.6 
+```bash
+python -m cli.generate --prompt "installation test" --dry-run
 ```
 
-#### Sage 2 Attention (40% faster)
+You should see a resolved configuration printed to the terminal without errors. If the command fails because of missing libraries, install them in the active virtual environment and rerun the dry-run.
 
-```shell
-# Windows
-pip install triton-windows 
-pip install https://github.com/woct0rdho/SageAttention/releases/download/v2.2.0-windows.post2/sageattention-2.2.0+cu128torch2.8.0.post2-cp39-abi3-win_amd64.whl
+## Next Steps
+- Review `docs/CLI.md` for the full flag surface.  
+- Consult `docs/MODELS.md` to understand available `--model-type` values and VRAM requirements.  
+- For AMD/ROCm-specific notes, see `docs/AMD-INSTALLATION.md`.
 
-# Linux (manual compilation required)
-python -m pip install "setuptools<=75.8.2" --force-reinstall
-git clone https://github.com/thu-ml/SageAttention
-cd SageAttention 
-pip install -e .
-```
-
-#### Flash Attention
-
-```shell
-# May require CUDA kernel compilation on Windows
-pip install flash-attn==2.7.2.post1
-```
-
- 
-## Attention Modes
-
-WanGP supports several attention implementations:
-
-- **SDPA** (default): Available by default with PyTorch
-- **Sage**: 30% speed boost with small quality cost
-- **Sage2**: 40% speed boost 
-- **Flash**: Good performance, may be complex to install on Windows
-
-### Attention GPU Compatibility
-
-- RTX 10XX, 20XX: SDPA
-- RTX 30XX, 40XX: SDPA, Flash Attention, Xformers, Sage, Sage2
-- RTX 50XX: SDPA, SDPA, Flash Attention, Xformers, Sage2
-
-## Performance Profiles
-
-Choose a profile based on your hardware:
-
-- **Profile 3 (LowRAM_HighVRAM)**: Loads entire model in VRAM, requires 24GB VRAM for 8-bit quantized 14B model
-- **Profile 4 (LowRAM_LowVRAM)**: Default, loads model parts as needed, slower but lower VRAM requirement
-
-## Troubleshooting
-
-### Sage Attention Issues
-
-If Sage attention doesn't work:
-
-1. Check if Triton is properly installed
-2. Clear Triton cache
-3. Fallback to SDPA attention:
-   ```bash
-   python wgp.py --attention sdpa
-   ```
-
-### Memory Issues
-
-- Use lower resolution or shorter videos
-- Enable quantization (default)
-- Use Profile 4 for lower VRAM usage
-- Consider using 1.3B models instead of 14B models
-
-
-For more troubleshooting, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md) 
+Keep the environment reproducible: document driver versions, PyTorch wheels, and any custom patches in your own operation notes so future runs remain deterministic.

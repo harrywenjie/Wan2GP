@@ -111,11 +111,6 @@ def get_window_width(i, j, token_per_frame, sparse_type, num_frame, decay_factor
             return token_per_frame
         if dist == 1:
             return token_per_frame // 2
-    elif model_type == "hunyuan":
-        if dist <= 1:
-            return token_per_frame
-    else:
-        raise ValueError(f"Unknown model type: {model_type}")
     group = dist.bit_length()
     decay_length = 2 ** token_per_frame.bit_length() / 2 ** group * decay_factor
     threshold = block_size
@@ -362,7 +357,7 @@ if __name__ == "__main__":
     token_per_frame = video_token_num / num_frame
     padded_video_token_num = ((video_token_num + 1) // 128 + 1) * 128
     print("padded: ", padded_video_token_num)
-    temporal_mask = gen_log_mask_shrinked(query, padded_video_token_num, video_token_num, num_frame, sparse_type="radial", decay_factor=1, model_type="hunyuan")
+    temporal_mask = gen_log_mask_shrinked(query, padded_video_token_num, video_token_num, num_frame, sparse_type="radial", decay_factor=1, model_type="wan")
     plt.figure(figsize=(10, 8), dpi=500)
 
     plt.imshow(temporal_mask.cpu().numpy()[:, :], cmap='hot')

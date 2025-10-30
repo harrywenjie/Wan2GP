@@ -109,7 +109,7 @@ def apply_rotary_emb_qwen(
         cos, sin = cos.to(x.device), sin.to(x.device)
 
         if use_real_unbind_dim == -1:
-            # Used for flux, cogvideox, hunyuan-dit
+            # Used for flux and cogvideox
             x_real, x_imag = x.reshape(*x.shape[:-1], -1, 2).unbind(-1)  # [B, S, H, D//2]
             x_rotated = torch.stack([-x_imag, x_real], dim=-1).flatten(3)
         elif use_real_unbind_dim == -2:
