@@ -56,7 +56,8 @@
 - Save helper dependency map:
   - `core.io.media.write_video` accepts torch tensors or numpy frames, performs the legacy normalization/grid logic, merges codec parameters, and logs retry failures through the injected logger.
   - `core.io.media.write_image` preserves the PNG/WebP/JPEG handling (including RGBA promotion to PNG) and surfaces retry exhaustion through the logger while still returning the resolved path for compatibility.
-  - Metadata bundler `write_metadata_bundle` infers the artifact type from the path/format hint, dispatches to the existing `save_*_metadata` helpers, and emits logger-aware diagnostics when persistence fails.
+- Metadata bundler `write_metadata_bundle` infers the artifact type from the path/format hint, dispatches to the existing `save_*_metadata` helpers, and emits logger-aware diagnostics when persistence fails.
+- `ProductionManager` now supplies `metadata_choice` plus cloned `MetadataSaveConfig` defaults ahead of each run so `wgp.generate_video` and post-processing flows embed metadata (or emit JSON sidecars) without consulting CLI state directly.
   - The MatAnyOne CLI forwards `request.codec` directly to `save_video`, so the new abstraction must preserve per-request codec overrides while still supporting `server_config` defaults used by `wgp`.
   - ProductionManager can now rely on the notifications logger default, but future metadata work still needs injectable logger hooks to replace the remaining `print` usage.
 - `core/io/media` now implements `write_video` and `write_image` with the legacy preprocessing/retry behaviour plus logger hooks; `shared.utils.audio_video` is a thin adapter that builds the configs and defaults to the notifications logger. `wgp` wraps the helpers to inject the logger for every call, and MatAnyOne forwards the CLI logger so persistence errors surface through structured logs.

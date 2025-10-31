@@ -8,10 +8,8 @@ from PIL import Image, PngImagePlugin
 
 from core.io.media import (
     ImageSaveConfig,
-    MetadataSaveConfig,
     VideoSaveConfig,
     write_image,
-    write_metadata_bundle,
     write_video,
 )
 from shared.utils.notifications import get_notifications_logger
@@ -306,17 +304,6 @@ def _legacy_save_image_metadata(image_path, metadata_dict, **save_kwargs):
             return True
         raise ValueError(f"Unsupported format for metadata embedding: {ext}")
 
-
-def save_image_metadata(image_path, metadata_dict, *, logger=None, **save_kwargs):
-    resolved_logger = logger if logger is not None else get_notifications_logger()
-    extra_options = {"image": {"save_kwargs": save_kwargs}} if save_kwargs else {}
-    config = MetadataSaveConfig(format_hint="image", extra_options=extra_options)
-    return write_metadata_bundle(
-        image_path,
-        metadata_dict,
-        config=config,
-        logger=resolved_logger,
-    )
 
 def read_image_metadata(image_path):
     try:

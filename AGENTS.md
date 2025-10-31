@@ -16,9 +16,6 @@ All actions should move the codebase toward minimalism, reproducibility, and det
   - Review `docs/CONTEXT.md` and `docs/WORK_HISTORY.md` for detailed context and recent work.
   - Review `## Immediate Next Actions` for current tasks.
   - Explore relevant parts of the codebase to rebuild working context.
-- Record new insights or architectural notes in `docs/CONTEXT.md`; keep `PROJECT_PLAN_LIVE.md` focused on current objectives and task lists.
-- Discuss design decisions (architecture, dependency pruning, model coverage) before major edits.
-- When refactoring or removing code, preserve debuggability through logging or CLI flags.
 
 ---
 
@@ -39,6 +36,8 @@ All actions should move the codebase toward minimalism, reproducibility, and det
 - Comment concisely — explain **intent**, not syntax. Focus on non-obvious control flow (scheduler handoffs, precision transitions, etc.).
 - Ensure all modules run cleanly **without** environment variables or assumptions from the legacy UI layer.
 - Maintain idempotent entry points (`cli/generate.py`) for testing and automation.
+- Discuss design decisions (architecture, dependency pruning, model coverage) before major edits.
+- When refactoring or removing code, preserve debuggability through logging or CLI flags.
 
 ---
 
@@ -50,6 +49,6 @@ All actions should move the codebase toward minimalism, reproducibility, and det
 
 ## Documentation & Communication
 - Treat `PROJECT_PLAN_LIVE.md` as the authoritative session log; use `README.md` and `docs/*` (e.g. `docs/CLI.md`, `docs/APPENDIX_HEADLESS.md`) as the current headless CLI references and update them when workflows change.
-- Use `docs/WORK_HISTORY.md` for detailed session logs and `docs/CONTEXT.md` for expanded architectural notes; keep `PROJECT_PLAN_LIVE.md` focused on current objectives, roadmap, and task lists.
+- Record new insights or architectural notes in `docs/CONTEXT.md`, use `docs/WORK_HISTORY.md` for detailed session logs, and keep `PROJECT_PLAN_LIVE.md` focused on current objectives, roadmap, and task lists.
 - Follow `## Handoff Protocol` in `PROJECT_PLAN_LIVE.md`; ensure `## Immediate Next Actions` always lists the next concrete tasks before you stop.
 - Keep sensitive artifacts (weights, media, tokens) **out of version control**; document required paths and environment variables explicitly.

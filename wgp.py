@@ -27,6 +27,7 @@ import random
 import json
 import numpy as np
 import importlib
+from dataclasses import replace
 from shared.bootstrap_defaults import DEFAULT_BOOTSTRAP_VALUES, GENERATION_FALLBACKS
 from core.progress import clear_status, format_duration, get_latest_status, merge_status_context, update_status
 from shared.utils.notifications import (
@@ -67,6 +68,7 @@ import gc
 import traceback
 import math 
 import typing
+from typing import Dict, Optional
 import inspect
 from shared.utils import prompt_parser
 import base64
@@ -92,6 +94,39 @@ def save_image(*args, **kwargs):
     if kwargs.get("logger") is None:
         kwargs["logger"] = get_notifications_logger()
     return _save_image(*args, **kwargs)
+
+
+metadata_configs: Dict[str, MetadataSaveConfig] = {}
+metadata_choice: Optional[str] = None
+
+
+def _copy_metadata_config(template: MetadataSaveConfig, fallback_hint: str) -> MetadataSaveConfig:
+    cloned = replace(template)
+    cloned.handlers = dict(template.handlers)
+    cloned.extra_options = {key: dict(value) for key, value in template.extra_options.items()}
+    if not cloned.format_hint:
+        cloned.format_hint = fallback_hint
+    return cloned
+
+
+def _resolve_metadata_config(
+    kind: str,
+    *,
+    embedded_images: Optional[Dict[str, str]] = None,
+) -> MetadataSaveConfig:
+    configs = metadata_configs if isinstance(metadata_configs, dict) else {}
+    template = configs.get(kind)
+    if template is not None:
+        config = _copy_metadata_config(template, kind)
+    else:
+        config = MetadataSaveConfig(format_hint=kind)
+    if kind == "video" and embedded_images:
+        video_options = dict(config.extra_options.get("video", {}))
+        video_options["source_images"] = embedded_images
+        extra_options = dict(config.extra_options)
+        extra_options["video"] = video_options
+        config.extra_options = extra_options
+    return config
 import zipfile
 import atexit
 import shutil
@@ -2511,22 +2546,29 @@ def edit_video(
                 file_settings_list.append(configs)
 
             if configs is not None:
-                from shared.utils.video_metadata import extract_source_images
+                metadata_mode = metadata_choice if metadata_choice is not None else server_config.get("metadata_type", "metadata")
+                metadata_logger = get_notifications_logger() if metadata_mode == "metadata" else None
+                temp_images_path: Optional[str] = None
+                embedded_images = None
+                if metadata_mode == "metadata" and server_config.get("embed_source_images", False):
+                    from shared.utils.video_metadata import extract_source_images
 
-                temp_images_path = get_available_filename(save_path, video_source, force_extension= ".temp")
-                embedded_images = extract_source_images(video_source, temp_images_path)
-                metadata_config = MetadataSaveConfig(
-                    format_hint="video",
-                    extra_options={"video": {"source_images": embedded_images}},
-                )
-                write_metadata_bundle(
-                    new_video_path,
-                    configs,
-                    config=metadata_config,
-                    logger=get_notifications_logger(),
-                )
-                if os.path.isdir(temp_images_path):
-                    shutil.rmtree(temp_images_path, ignore_errors= True)
+                    temp_images_path = get_available_filename(save_path, video_source, force_extension=".temp")
+                    embedded_images = extract_source_images(video_source, temp_images_path)
+                if metadata_mode == "json":
+                    json_path = Path(new_video_path).with_suffix(".json")
+                    with open(json_path, "w", encoding="utf-8") as writer:
+                        json.dump(configs, writer, indent=4)
+                elif metadata_mode == "metadata":
+                    metadata_config = _resolve_metadata_config("video", embedded_images=embedded_images)
+                    write_metadata_bundle(
+                        new_video_path,
+                        configs,
+                        config=metadata_config,
+                        logger=metadata_logger,
+                    )
+                if temp_images_path and os.path.isdir(temp_images_path):
+                    shutil.rmtree(temp_images_path, ignore_errors=True)
             send_cmd("output")
             seed = set_seed(-1)
     if has_already_audio:
@@ -3664,7 +3706,11 @@ def generate_video(
                     "transformer_loras_filenames" : transformer_loras_filenames,
                     "transformer_loras_multipliers" : transformer_loras_multipliers
                     })
-                embedded_images = {img_name: inputs[img_name] for img_name in image_names_list } if server_config.get("embed_source_images", False) else None
+                embedded_images = (
+                    {img_name: inputs[img_name] for img_name in image_names_list}
+                    if server_config.get("embed_source_images", False)
+                    else None
+                )
                 configs = prepare_inputs_dict("metadata", inputs, model_type)
                 if sliding_window: configs["window_no"] = window_no
                 configs["prompt"] = "\n".join(original_prompts)
@@ -3672,21 +3718,21 @@ def generate_video(
                     configs["enhanced_prompt"] = "\n".join(prompts)
                 configs["generation_time"] = round(end_time-start_time)
                 # if is_image: configs["is_image"] = True
-                metadata_choice = server_config.get("metadata_type","metadata")
+                metadata_mode = metadata_choice if metadata_choice is not None else server_config.get("metadata_type", "metadata")
                 video_path = [video_path] if not isinstance(video_path, list) else video_path
-                metadata_logger = get_notifications_logger() if metadata_choice == "metadata" else None
+                metadata_logger = get_notifications_logger() if metadata_mode == "metadata" else None
                 for no, path in enumerate(video_path):
-                    if metadata_choice == "json":
-                        with open(path.replace(f'.{extension}', '.json'), 'w') as f:
-                            json.dump(configs, f, indent=4)
-                    elif metadata_choice == "metadata":
+                    if metadata_mode == "json":
+                        json_path = Path(path).with_suffix(".json")
+                        with open(json_path, "w", encoding="utf-8") as writer:
+                            json.dump(configs, writer, indent=4)
+                    elif metadata_mode == "metadata":
                         if audio_only:
-                            config = MetadataSaveConfig(format_hint="audio")
+                            config = _resolve_metadata_config("audio")
                         elif is_image:
-                            config = MetadataSaveConfig(format_hint="image")
+                            config = _resolve_metadata_config("image")
                         else:
-                            extra_options = {"video": {"source_images": embedded_images}} if embedded_images else {}
-                            config = MetadataSaveConfig(format_hint="video", extra_options=extra_options)
+                            config = _resolve_metadata_config("video", embedded_images=embedded_images)
                         write_metadata_bundle(
                             path,
                             configs,

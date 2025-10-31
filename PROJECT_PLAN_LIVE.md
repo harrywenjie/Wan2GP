@@ -80,9 +80,9 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ---
 
 ## Immediate Next Actions
-- Inject `MetadataSaveConfig` defaults via `ProductionManager` so CLI flows control metadata persistence without touching `wgp`.
-- Retire the legacy `save_*_metadata` shims once the new configs are in place, pruning redundant imports and helpers.
-- Document the new metadata embedding behaviour (WAN generation + MatAnyOne) in `docs/CLI.md` and `docs/APPENDIX_HEADLESS.md`, noting how to opt into JSON sidecars.
+- Expose a CLI flag that overrides `metadata_type` per run (embedded metadata vs JSON sidecars) and pipe the selection into `ProductionManager.metadata_choice`.
+- Propagate the metadata-mode override through queue submissions so queued tasks and resumptions honour CLI choices consistently.
+- Centralise MatAnyOne metadata config construction to reuse the shared factory instead of instantiating `MetadataSaveConfig` inline.
 
 ---
 

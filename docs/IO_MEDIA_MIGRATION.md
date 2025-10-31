@@ -32,7 +32,7 @@ Relocate the media output helpers (`save_video`, `save_image`, and the associate
 1. **Introduce module and dataclasses** *(Done)* – `core/io/media.py` now owns the config dataclasses and implements `write_video`/`write_image` with the legacy preprocessing, retry, and codec handling plus logger hooks.
 2. **Implement compatibility shims** *(Done)* – `shared.utils.audio_video.save_video/save_image` are thin adapters that construct configs, default to the notifications logger, and delegate to the core helpers; `wgp` and MatAnyOne inject the logger explicitly.
 3. **Migrate metadata writers** *(Done)* – `write_metadata_bundle` now dispatches to the legacy `save_*_metadata` helpers, `shared.utils.audio_video` delegates through logger-aware shims, and both `wgp` and MatAnyOne emit metadata via `MetadataSaveConfig`.
-4. **Retire legacy metadata helpers** *(Pending)* – once `write_metadata_bundle` is wired everywhere, remove the direct exports from `shared.utils.audio_video` and collapse any redundant imports (`shared.utils.audio_metadata`, `shared.utils.video_metadata`, etc.).
+4. **Retire legacy metadata helpers** *(Done)* – removed the `shared.utils.audio_video.save_image_metadata` shim and tightened imports so the bundler routes through the dedicated media modules.
 5. **Document the new surfaces** *(Pending)* – refresh `docs/CLI.md`, `docs/APPENDIX_HEADLESS.md`, and this plan after the metadata migration to capture the final CLI workflow.
 
 ## Dependency Map
@@ -54,9 +54,8 @@ Relocate the media output helpers (`save_video`, `save_image`, and the associate
 - `write_metadata_bundle` will dispatch to:
   - `shared.utils.video_metadata.save_video_metadata` for MP4/MKV outputs.
   - `shared.utils.audio_metadata.save_audio_metadata` for audio sidecars (when present).
-  - `shared.utils.audio_video.save_image_metadata` for thumbnail captures (until relocated).
 - The helper should accept a logger (defaulting to the notifications logger) and translate the current `print` statements into `logger.warning`/`logger.error` calls.
-- Next step: have `ProductionManager` build/deliver `MetadataSaveConfig` instances from `server_config`, retire the legacy shims, and expose CLI controls for opting into JSON sidecars as an alternative.
+- Next step: surface CLI/runner-level controls for toggling metadata manifests (e.g. JSON sidecars, structured summaries) now that `ProductionManager` ships the per-type `MetadataSaveConfig` templates.
 
 ## Validation
 - Extend smoke tests: run `python -m cli.generate --prompt "smoke test prompt" --dry-run` plus a low-res render to confirm output paths.

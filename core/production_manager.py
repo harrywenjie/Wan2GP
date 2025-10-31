@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 from core.task_inputs import TaskInputManager
 from shared.notifications import GenerationNotifier
+from core.io.media import MetadataSaveConfig
 
 if TYPE_CHECKING:
     from cli.queue_state import QueueStateTracker
@@ -154,6 +155,7 @@ class ProductionManager:
         self._queue_tracker: QueueStateTracker = queue_tracker
         self._update_queue_tracking = queue_state_module.update_queue_tracking
         self._task_inputs_manager = task_input_manager
+        self._metadata_config_templates: Optional[Dict[str, MetadataSaveConfig]] = None
 
     @property
     def wgp(self) -> Any:
@@ -275,6 +277,48 @@ class ProductionManager:
         gen.setdefault("in_progress", False)
         return gen
 
+    def _metadata_choice(self) -> str:
+        server_config = getattr(self._wgp, "server_config", {}) or {}
+        choice = server_config.get("metadata_type", "metadata")
+        return str(choice)
+
+    def _metadata_config_templates(self) -> Dict[str, MetadataSaveConfig]:
+        if self._metadata_config_templates is not None:
+            return self._metadata_config_templates
+
+        wgp = self._wgp
+        server_config = getattr(wgp, "server_config", None)
+        if server_config is None:
+            templates: Dict[str, MetadataSaveConfig] = {}
+        else:
+            templates = {
+                "video": MetadataSaveConfig(format_hint="video"),
+                "image": MetadataSaveConfig(format_hint="image"),
+                "audio": MetadataSaveConfig(format_hint="audio"),
+            }
+        self._metadata_config_templates = templates
+        return templates
+
+    def _clone_metadata_configs(self) -> Dict[str, MetadataSaveConfig]:
+        templates = self._metadata_config_templates()
+        return {
+            key: self._clone_metadata_config(template, fallback_hint=key)
+            for key, template in templates.items()
+        }
+
+    @staticmethod
+    def _clone_metadata_config(
+        template: MetadataSaveConfig,
+        *,
+        fallback_hint: str,
+    ) -> MetadataSaveConfig:
+        cloned = replace(template)
+        cloned.handlers = dict(template.handlers)
+        cloned.extra_options = {key: dict(value) for key, value in template.extra_options.items()}
+        if not cloned.format_hint:
+            cloned.format_hint = fallback_hint
+        return cloned
+
     def run_generation(
         self,
         params: Dict[str, Any],
@@ -303,12 +347,19 @@ class ProductionManager:
 
         self._ensure_model_ready(params, send_cmd)
 
+        metadata_choice = self._metadata_choice()
+        metadata_configs = self._clone_metadata_configs()
+        merged_attr_overrides = dict(attr_overrides or {})
+        merged_attr_overrides.setdefault("metadata_choice", metadata_choice)
+        if metadata_configs:
+            merged_attr_overrides.setdefault("metadata_configs", metadata_configs)
+
         runtime = GenerationRuntime(
             wgp=self._wgp,
             state=state,
             output_dir_override=output_dir_override,
             image_output_dir_override=image_output_dir_override,
-            attr_overrides=attr_overrides or {},
+            attr_overrides=merged_attr_overrides,
             server_config_overrides=server_config_overrides or {},
             task_seed=task_seed,
             task_stub=task_stub,
