@@ -106,6 +106,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Load generation defaults from a saved settings JSON or media file with embedded metadata.",
     )
     parser.add_argument(
+        "--metadata-mode",
+        choices=["metadata", "json"],
+        default=None,
+        help=(
+            "Select how run metadata is persisted: 'metadata' embeds into media files, "
+            "while 'json' writes sidecar manifests. Defaults to server_config['metadata_type']."
+        ),
+    )
+    parser.add_argument(
         "--image-start",
         type=Path,
         default=None,

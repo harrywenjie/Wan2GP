@@ -4,6 +4,9 @@ from pathlib import Path
 from typing import Optional, Union
 
 from .media import (
+    build_metadata_config,
+    clone_metadata_config,
+    default_metadata_config_templates,
     ImageSaveConfig,
     MetadataSaveConfig,
     VideoSaveConfig,
@@ -53,6 +56,9 @@ __all__ = [
     "ImageSaveConfig",
     "MetadataSaveConfig",
     "VideoSaveConfig",
+    "build_metadata_config",
+    "clone_metadata_config",
+    "default_metadata_config_templates",
     "get_available_filename",
     "write_image",
     "write_metadata_bundle",

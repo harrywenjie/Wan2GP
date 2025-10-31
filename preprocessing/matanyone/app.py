@@ -20,7 +20,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from core.io.media import MetadataSaveConfig, write_metadata_bundle
+from core.io.media import build_metadata_config, write_metadata_bundle
 from shared.utils import files_locator as fl
 from shared.utils.audio_video import (
     cleanup_temp_audio_files,
@@ -451,7 +451,7 @@ def _save_outputs(
         "new_dim": request.new_dim,
     }
 
-    metadata_config = MetadataSaveConfig(format_hint="video")
+    metadata_config = build_metadata_config("video")
     foreground_metadata = dict(metadata)
     foreground_metadata["artifact_role"] = "foreground"
     write_metadata_bundle(

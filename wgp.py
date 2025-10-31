@@ -27,7 +27,6 @@ import random
 import json
 import numpy as np
 import importlib
-from dataclasses import replace
 from shared.bootstrap_defaults import DEFAULT_BOOTSTRAP_VALUES, GENERATION_FALLBACKS
 from core.progress import clear_status, format_duration, get_latest_status, merge_status_context, update_status
 from shared.utils.notifications import (
@@ -60,7 +59,7 @@ from shared.attention import get_attention_modes, get_supported_attention_modes
 from shared.utils.utils import truncate_for_filesystem, sanitize_file_name, process_images_multithread, get_default_workers
 from shared.utils.process_locks import acquire_GPU_ressources, get_gen_info, release_GPU_ressources, gen_lock
 from core.io import get_available_filename
-from core.io.media import MetadataSaveConfig, write_metadata_bundle
+from core.io.media import MetadataSaveConfig, clone_metadata_config, write_metadata_bundle
 from huggingface_hub import hf_hub_download, snapshot_download
 from shared.utils import files_locator as fl 
 import torch
@@ -100,15 +99,6 @@ metadata_configs: Dict[str, MetadataSaveConfig] = {}
 metadata_choice: Optional[str] = None
 
 
-def _copy_metadata_config(template: MetadataSaveConfig, fallback_hint: str) -> MetadataSaveConfig:
-    cloned = replace(template)
-    cloned.handlers = dict(template.handlers)
-    cloned.extra_options = {key: dict(value) for key, value in template.extra_options.items()}
-    if not cloned.format_hint:
-        cloned.format_hint = fallback_hint
-    return cloned
-
-
 def _resolve_metadata_config(
     kind: str,
     *,
@@ -117,7 +107,7 @@ def _resolve_metadata_config(
     configs = metadata_configs if isinstance(metadata_configs, dict) else {}
     template = configs.get(kind)
     if template is not None:
-        config = _copy_metadata_config(template, kind)
+        config = clone_metadata_config(template, fallback_hint=kind)
     else:
         config = MetadataSaveConfig(format_hint=kind)
     if kind == "video" and embedded_images:

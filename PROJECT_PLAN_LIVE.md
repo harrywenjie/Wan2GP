@@ -80,9 +80,9 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ---
 
 ## Immediate Next Actions
-- Expose a CLI flag that overrides `metadata_type` per run (embedded metadata vs JSON sidecars) and pipe the selection into `ProductionManager.metadata_choice`.
-- Propagate the metadata-mode override through queue submissions so queued tasks and resumptions honour CLI choices consistently.
-- Centralise MatAnyOne metadata config construction to reuse the shared factory instead of instantiating `MetadataSaveConfig` inline.
+- Extend `cli.matanyone` with a `--metadata-mode` flag, threading the selection through request objects so `_save_outputs` can emit embedded metadata or JSON sidecars per run.
+- Refactor `wgp._resolve_metadata_config` to lean on the shared `core.io.media` helpers, keeping the source-image embedding logic while removing bespoke copy/cloning code.
+- Expose a public accessor on `ProductionManager` for metadata config templates so downstream pipelines can reuse CLI-provided clones instead of rebuilding defaults.
 
 ---
 

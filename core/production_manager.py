@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 from core.task_inputs import TaskInputManager
 from shared.notifications import GenerationNotifier
-from core.io.media import MetadataSaveConfig
+from core.io.media import (
+    MetadataSaveConfig,
+    clone_metadata_config,
+    default_metadata_config_templates,
+)
 
 if TYPE_CHECKING:
     from cli.queue_state import QueueStateTracker
@@ -286,38 +290,17 @@ class ProductionManager:
         if self._metadata_config_templates is not None:
             return self._metadata_config_templates
 
-        wgp = self._wgp
-        server_config = getattr(wgp, "server_config", None)
-        if server_config is None:
-            templates: Dict[str, MetadataSaveConfig] = {}
-        else:
-            templates = {
-                "video": MetadataSaveConfig(format_hint="video"),
-                "image": MetadataSaveConfig(format_hint="image"),
-                "audio": MetadataSaveConfig(format_hint="audio"),
-            }
+        server_config = getattr(self._wgp, "server_config", None)
+        templates = default_metadata_config_templates() if server_config is not None else {}
         self._metadata_config_templates = templates
         return templates
 
     def _clone_metadata_configs(self) -> Dict[str, MetadataSaveConfig]:
         templates = self._metadata_config_templates()
         return {
-            key: self._clone_metadata_config(template, fallback_hint=key)
+            key: clone_metadata_config(template, fallback_hint=key)
             for key, template in templates.items()
         }
-
-    @staticmethod
-    def _clone_metadata_config(
-        template: MetadataSaveConfig,
-        *,
-        fallback_hint: str,
-    ) -> MetadataSaveConfig:
-        cloned = replace(template)
-        cloned.handlers = dict(template.handlers)
-        cloned.extra_options = {key: dict(value) for key, value in template.extra_options.items()}
-        if not cloned.format_hint:
-            cloned.format_hint = fallback_hint
-        return cloned
 
     def run_generation(
         self,

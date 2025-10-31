@@ -57,9 +57,10 @@ Every path must reference an existing file; the CLI validates before execution.
 - `--output-dir PATH` – directory where rendered assets are written. Overrides are per-run; each execution falls back to the configured default (`save_path` inside `wgp.py`) unless the flag is provided again.
 
 ### Metadata Persistence
-- Generation runs embed metadata according to `wgp_config.json -> metadata_type`. `metadata` (default) writes structured info back into media files using manager-supplied `MetadataSaveConfig` defaults; set the value to `json` to emit sidecar files alongside each artifact instead.
+- `--metadata-mode {metadata,json}` – per-run override for how metadata is emitted. `metadata` embeds structured info back into the rendered media, while `json` writes sidecar manifests next to each artifact. Omit the flag to reuse the persisted default.
+- Generation runs continue to respect `wgp_config.json -> metadata_type` when `--metadata-mode` is not supplied.
 - When `metadata_type` is left at `metadata`, enabling `embed_source_images` preserves reference frames inside the video metadata bundle (the CLI injects this automatically via `ProductionManager`).
-- MatAnyOne follows the same defaults: foreground/alpha MP4s embed metadata unless you opt into JSON sidecars, and the CLI reuses the shared logger hooks for diagnostics.
+- MatAnyOne follows the same defaults: foreground/alpha MP4s embed metadata unless you opt into JSON sidecars, and the CLI now reuses the shared metadata config factory for consistency.
 
 ### Runtime Controls
 - Unless stated otherwise, runtime toggles act on the current execution only. Persistent defaults continue to originate from `wgp_config.json`; adjust that file directly if you need new baseline behaviour.

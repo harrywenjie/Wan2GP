@@ -52,6 +52,7 @@ class QueueController:
         plugin_data: Optional[Dict[str, Any]] = None,
         task_stub: Optional[Dict[str, Any]] = None,
         task_seed: Optional[int] = None,
+        attr_overrides: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         gen_state = self._state.setdefault("gen", {})
         queue: List[Dict[str, Any]] = gen_state.setdefault("queue", [])
@@ -61,6 +62,7 @@ class QueueController:
             plugin_data=plugin_data,
             task_stub=task_stub,
             task_id=active_seed,
+            attr_overrides=attr_overrides,
         )
         queue.append(entry)
         self._update_queue_tracking(queue)
@@ -91,6 +93,7 @@ class QueueController:
         plugin_data: Optional[Dict[str, Any]],
         task_stub: Optional[Dict[str, Any]],
         task_id: int,
+        attr_overrides: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
         metadata_inputs = dict(params)
         metadata = self.task_inputs.prepare_inputs_dict(
@@ -116,6 +119,8 @@ class QueueController:
             "start_image_data": preview.start_data,
             "end_image_data": preview.end_data,
         }
+        if attr_overrides:
+            queue_entry["attr_overrides"] = dict(attr_overrides)
         queue_entry.update(self._build_queue_summary(params, metadata, preview))
         return queue_entry
 
@@ -303,6 +308,11 @@ class QueueController:
         plugin_data = task.get("plugin_data")
         task_stub = task.get("task_stub")
         task_seed = task["id"]
+        task_specific_overrides = task.get("attr_overrides")
+        merged_attr_overrides = dict(attr_overrides or {})
+        if isinstance(task_specific_overrides, dict):
+            merged_attr_overrides.update(task_specific_overrides)
+        resolved_attr_overrides = merged_attr_overrides or None
 
         def worker() -> None:
             try:
@@ -312,7 +322,7 @@ class QueueController:
                     send_cmd=internal_send,
                     output_dir_override=output_dir_override,
                     image_output_dir_override=image_output_dir_override,
-                    attr_overrides=attr_overrides,
+                    attr_overrides=resolved_attr_overrides,
                     server_config_overrides=server_config_overrides,
                     notifier=resolved_notifier,
                     callback_builder=resolved_callback_builder,
@@ -431,6 +441,7 @@ class QueueController:
             plugin_data=plugin_data,
             task_stub=task_stub,
             task_seed=task_seed,
+            attr_overrides=attr_overrides,
         )
         try:
             return self.run_all(

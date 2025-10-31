@@ -4,7 +4,7 @@ import logging
 import os
 import secrets
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 
@@ -77,6 +77,57 @@ class MetadataSaveConfig:
     format_hint: Optional[str] = None
     handlers: Dict[str, MetadataHandler] = field(default_factory=dict)
     extra_options: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+
+def clone_metadata_config(
+    template: MetadataSaveConfig,
+    *,
+    fallback_hint: str,
+) -> MetadataSaveConfig:
+    """
+    Return a deep copy of a metadata configuration template.
+
+    The clone keeps handler bindings and per-format options isolated so callers can
+    mutate the result without affecting shared templates.
+    """
+
+    cloned = replace(template)
+    cloned.handlers = dict(template.handlers)
+    cloned.extra_options = {key: dict(value) for key, value in template.extra_options.items()}
+    if not cloned.format_hint:
+        cloned.format_hint = fallback_hint
+    return cloned
+
+
+def default_metadata_config_templates() -> Dict[str, MetadataSaveConfig]:
+    """
+    Provide the default metadata configuration templates for video, image, and audio.
+    """
+
+    return {
+        "video": MetadataSaveConfig(format_hint="video"),
+        "image": MetadataSaveConfig(format_hint="image"),
+        "audio": MetadataSaveConfig(format_hint="audio"),
+    }
+
+
+def build_metadata_config(
+    format_hint: str,
+    *,
+    templates: Optional[Dict[str, MetadataSaveConfig]] = None,
+) -> MetadataSaveConfig:
+    """
+    Construct a metadata configuration for the requested format.
+
+    When templates are supplied the function clones the matching entry; otherwise it
+    falls back to the module defaults.
+    """
+
+    candidates = templates if templates is not None else default_metadata_config_templates()
+    template = candidates.get(format_hint)
+    if template is not None:
+        return clone_metadata_config(template, fallback_hint=format_hint)
+    return MetadataSaveConfig(format_hint=format_hint)
 
 
 def _ensure_container_suffix(path: str, container: Optional[str]) -> str:

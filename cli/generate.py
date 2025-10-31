@@ -723,6 +723,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     wgp = import_wgp()
     runtime_summary, applied_runtime = apply_runtime_overrides(wgp, args, logger)
 
+    server_config = getattr(wgp, "server_config", {}) or {}
+    metadata_mode_override = args.metadata_mode
+    resolved_metadata_mode = metadata_mode_override or str(server_config.get("metadata_type", "metadata"))
+    runtime_summary["metadata_mode"] = resolved_metadata_mode
+    if metadata_mode_override is not None:
+        applied_runtime["metadata_mode"] = metadata_mode_override
+
     model_type = args.model_type
     model_filename = wgp.get_model_filename(
         model_type,
@@ -794,6 +801,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         logger.info("Runtime overrides: %s", formatted)
     logger.debug("Effective runtime configuration: %s", runtime_summary)
 
+    if metadata_mode_override is not None:
+        logger.info(
+            "Metadata mode override active: %s",
+            metadata_mode_override,
+        )
+
     if args.prompt_enhancer is not None:
         provider_name = runtime_summary.get("prompt_enhancer_provider") or "disabled"
         if args.prompt_enhancer == "off":
@@ -852,6 +865,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     send_cmd = build_send_cmd(state, logger)
     output_override = output_dir if args.output_dir is not None else None
     callback_builder = make_cli_callback_builder(wgp, logger)
+    attr_overrides: Dict[str, Any] = {}
+    if metadata_mode_override is not None:
+        attr_overrides["metadata_choice"] = metadata_mode_override
     manager = ProductionManager(
         wgp_module=wgp,
         default_notifier=notifier,
@@ -887,6 +903,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             send_cmd=send_cmd,
             output_dir_override=output_override,
             image_output_dir_override=output_override,
+            attr_overrides=attr_overrides or None,
         )
     except KeyboardInterrupt:
         logger.warning("Generation interrupted by user (Ctrl+C).")
