@@ -32,6 +32,19 @@ The headless build never exposes GUI-driven affordances — video/audio playback
    - [Planned] Identify and inject dependencies (models, loaders, metadata helpers) so the class operates without mutating module-level globals.
    - [Planned] Provide a thin compatibility shim so current CLI entrypoints can invoke `ProductionManager` while the remaining `wgp` functionality is migrated, and track the follow-up work required to delete `wgp.py` entirely.
 
+### ProductionManager Extraction Inventory (2025-02-18)
+- Runtime coupling: `ProductionManager` still reads `wan_model`, `transformer_type`, `reload_needed`, and profile defaults, calling `load_models` / `release_model` to hydrate state before delegating to `generate_video`.
+- Task input hooks: `TaskInputManager` depends on `wgp` for model discovery (`get_model_record`, `get_model_name`, `get_model_def`, `get_base_model_type`, `get_model_family`) plus compatibility gates (`test_vace_module`, `test_class_t2v`, `test_any_sliding_window`, `any_audio_track`, `are_model_types_compatible`) and configuration writers (`get_settings_file_name`, `set_model_settings`, `get_default_settings`, `get_model_settings`, `fix_settings`, `notify_info`, `lock`).
+- Output persistence: `generate_video` now imports the filename allocator from `core.io.get_available_filename` but still writes assets/metadata through inline helpers (`save_video`, `save_image`, `save_image_metadata`, `save_audio_metadata`, `save_video_metadata`) that live inside `wgp.py`.
+- Prompt & LoRA prep: CLI flows call `setup_loras`, `extract_preset`, `process_prompt_enhancer`, and enhancer initialisers (`reset_prompt_enhancer`, `setup_prompt_enhancer`) directly on `wgp`.
+- Queue/notifier integration: `GenerationRuntime` falls back to `create_legacy_notifier`, mutates queue state via `update_task_thumbnails`, and still expects progress resets to live in `wgp`.
+- Save helper extraction outline (2025-02-18):
+  1. Carve out `core/io/media.py` (or extend `core/io.py`) with focused writers: `write_video_frames`, `write_image_tensor`, and `write_metadata_bundle`. Each should accept explicit dependency bundles (codecs, quality presets, logger, retry policy) instead of reading globals.
+  2. Introduce lightweight config dataclasses (`VideoSaveConfig`, `ImageSaveConfig`, `MetadataSaveConfig`) that encapsulate `server_config`-derived defaults (codec/container/quality) so callers inject them through `ProductionManager` rather than mutating `wgp`.
+  3. Provide logging hooks by passing a `logger` or callable into the helpers; replace the current `print` statements in `shared.utils.audio_video` with structured logging surfaced through the injected notifier/logger.
+  4. Update `wgp.generate_video` and MatAnyOne to consume the new helpers via `ProductionManager`-supplied adapters, keeping return values/backwards compatibility intact while shrinking direct dependencies on `shared.utils.audio_video`.
+  5. Relocate the metadata writers (`save_video_metadata`, `save_image_metadata`, `save_audio_metadata`) alongside the new module, exposing them through a unified interface so future queue runners can mock or redirect persistence easily.
+
 3. **Externalise queueing and CLI orchestration**
    - [In Progress] Keep queue management under `cli/` (and future worker integrations) while `ProductionManager` exposes stateless generation hooks.
    - [Planned] Relocate `QueueStateTracker` and related helpers out of `core/` into the CLI queue package so inference code remains the only surface under `core/`.
@@ -67,7 +80,8 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ---
 
 ## Immediate Next Actions
-- Outline the next ProductionManager extraction step: inventory remaining `wgp.py` dependencies and propose the next helper to migrate into `core/` or `cli/`.
+- Scaffold `core/io/media.py` with `VideoSaveConfig` / `ImageSaveConfig` / `MetadataSaveConfig` dataclasses plus stubbed writer functions that accept injected loggers.
+- Add compatibility shims in `shared.utils.audio_video` that delegate to the new helpers so `wgp` and MatAnyOne can migrate incrementally.
 
 ---
 

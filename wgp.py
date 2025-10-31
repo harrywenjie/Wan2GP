@@ -46,6 +46,7 @@ from shared.match_archi import match_nvidia_architecture
 from shared.attention import get_attention_modes, get_supported_attention_modes
 from shared.utils.utils import truncate_for_filesystem, sanitize_file_name, process_images_multithread, get_default_workers
 from shared.utils.process_locks import acquire_GPU_ressources, get_gen_info, release_GPU_ressources, gen_lock
+from core.io import get_available_filename
 from huggingface_hub import hf_hub_download, snapshot_download
 from shared.utils import files_locator as fl 
 import torch
@@ -2322,21 +2323,6 @@ def any_audio_track(model_type):
     if model_def.get("returns_audio", False):
         return True
     return model_def.get("multitalk_class", False)
-
-def get_available_filename(target_path, video_source, suffix = "", force_extension = None):
-    name, extension =  os.path.splitext(os.path.basename(video_source))
-    if force_extension != None:
-        extension = force_extension
-    name+= suffix
-    full_path= os.path.join(target_path, f"{name}{extension}")
-    if not os.path.exists(full_path):
-        return full_path
-    counter = 2
-    while True:
-        full_path= os.path.join(target_path, f"{name}({counter}){extension}")
-        if not os.path.exists(full_path):
-            return full_path
-        counter += 1
 
 def set_seed(seed):
     import random
