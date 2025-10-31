@@ -23,6 +23,11 @@ def _get_logger() -> Logger:
     return fallback_logger
 
 
+def get_notifications_logger() -> Logger:
+    """Expose the currently configured notifications logger."""
+    return _get_logger()
+
+
 def notify_debug(message: str) -> None:
     _get_logger().debug(message)
 

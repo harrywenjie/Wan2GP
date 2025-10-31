@@ -27,6 +27,7 @@ from shared.utils.audio_video import (
     extract_audio_tracks,
     save_video,
 )
+from shared.utils.notifications import get_notifications_logger
 from shared.utils.process_locks import acquire_GPU_ressources, release_GPU_ressources
 from shared.utils.utils import (
     calculate_new_dimensions,
@@ -378,6 +379,7 @@ def _save_outputs(
 ) -> MatAnyOneResult:
     request.output_dir.mkdir(parents=True, exist_ok=True)
 
+    media_logger = get_notifications_logger()
     timestamp = datetime.now().strftime("%Y-%m-%d-%Hh%Mm%Ss")
     base_name = sanitize_file_name(request.input_path.stem) or "matanyone"
     base_name = truncate_for_filesystem(base_name)
@@ -392,7 +394,13 @@ def _save_outputs(
 
     if audio_tracks:
         temp_foreground = request.output_dir / f"{prefix}{foreground_suffix}_tmp.mp4"
-        temp_video_path = save_video(frames, str(temp_foreground), fps=fps, codec_type=request.codec)
+        temp_video_path = save_video(
+            frames,
+            str(temp_foreground),
+            fps=fps,
+            codec_type=request.codec,
+            logger=media_logger,
+        )
         combine_video_with_audio_tracks(
             temp_video_path,
             audio_tracks,
@@ -405,10 +413,22 @@ def _save_outputs(
             temp_file.unlink()
         final_foreground_path = foreground_path
     else:
-        saved_path = save_video(frames, str(foreground_path), fps=fps, codec_type=request.codec)
+        saved_path = save_video(
+            frames,
+            str(foreground_path),
+            fps=fps,
+            codec_type=request.codec,
+            logger=media_logger,
+        )
         final_foreground_path = Path(saved_path)
 
-    saved_alpha_path = save_video(alpha_frames, str(alpha_path), fps=fps, codec_type=request.codec)
+    saved_alpha_path = save_video(
+        alpha_frames,
+        str(alpha_path),
+        fps=fps,
+        codec_type=request.codec,
+        logger=media_logger,
+    )
     final_alpha_path = Path(saved_alpha_path)
 
     rgba_zip_path: Optional[Path] = None

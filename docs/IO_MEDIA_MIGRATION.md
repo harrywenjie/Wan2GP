@@ -29,27 +29,34 @@ Relocate the media output helpers (`save_video`, `save_image`, and the associate
 - Surface retry exhaustion via `MediaWriteError` exceptions so CLI callers can respond deterministically (abort task or continue without optional assets).
 
 ## Migration Steps
-1. **Introduce module and dataclasses** – add `core/io/media.py` with the new helpers, unit-friendly interfaces, and logging hooks.
-2. **Implement compatibility shims** – update `shared.utils.audio_video.save_video/save_image` and metadata writers to call into `core/io/media.py`, emitting deprecation warnings.
-3. **Update orchestration layers** – adjust `wgp.generate_video`, `ProductionManager`, and MatAnyOne to instantiate configs and call the new helpers directly; remove reliance on the legacy shims once all call sites migrate.
-4. **Delete shims** – after validation, drop the old functions from `shared.utils.audio_video` and clean up imports.
-5. **Document the new surfaces** – refresh `docs/CLI.md`, `docs/APPENDIX_HEADLESS.md`, and this project plan with the final module structure.
+1. **Introduce module and dataclasses** *(Done)* – `core/io/media.py` now owns the config dataclasses and implements `write_video`/`write_image` with the legacy preprocessing, retry, and codec handling plus logger hooks.
+2. **Implement compatibility shims** *(Done)* – `shared.utils.audio_video.save_video/save_image` are thin adapters that construct configs, default to the notifications logger, and delegate to the core helpers; `wgp` and MatAnyOne inject the logger explicitly.
+3. **Migrate metadata writers** *(Planned)* – model `MetadataSaveConfig` after the existing `save_*_metadata` helpers, expose a `write_metadata_bundle` orchestrator, and update callers to route through the new interface.
+4. **Retire legacy metadata helpers** *(Pending)* – once `write_metadata_bundle` is wired everywhere, remove the direct exports from `shared.utils.audio_video` and collapse any redundant imports (`shared.utils.audio_metadata`, `shared.utils.video_metadata`, etc.).
+5. **Document the new surfaces** *(Pending)* – refresh `docs/CLI.md`, `docs/APPENDIX_HEADLESS.md`, and this plan after the metadata migration to capture the final CLI workflow.
 
 ## Dependency Map
-- **`shared.utils.audio_video.save_video`**
-  - Imports: `torch`, `torchvision`, `imageio`, `numpy`, and `shared.utils.misc.rand_name` for temp files.
-  - Inputs: tensor (torch or numpy), FPS, codec string (matches server_config `video_output_codec`), container (`video_container`), retry count, and optional `save_file`.
-  - Behaviour: writes to `/tmp` when `save_file` is `None`, mutates tensor normalization in-place, prints errors on failure.
-- **`shared.utils.audio_video.save_image`**
-  - Imports: `torch`, `torchvision`, `PIL.Image`.
-  - Inputs: torch tensor, target path, grid params, codec string (server_config `image_output_codec`), retry count.
-  - Behaviour: switches extension based on codec string, uses PIL for RGBA/WebP variants, prints errors when retries exhaust.
+- **`core.io.media.write_video`**
+  - Accepts torch tensors or iterables of HWC `uint8` frames, performs grid assembly via `torchvision`, clamps/normalises values, and writes with `imageio` using merged codec parameters.
+  - Retries are logged through the injected logger; returns `None` after exhausting attempts to preserve legacy semantics.
+- **`core.io.media.write_image`**
+  - Operates on torch tensors, converts RGBA tensors to PNG automatically, and uses PIL or `torchvision` depending on the requested format.
+  - Returns the resolved path even when retries exhaust, mirroring the legacy helper so callers can decide how to respond.
 - **Metadata writers**
   - `save_video_metadata` (MP4/MKV), `save_image_metadata` (PNG/JPEG/WebP via `PIL` + `piexif`), `save_audio_metadata` (WAV via `mutagen`), all emit `print` on failure.
 - **Orchestration touchpoints**
-  - `wgp.generate_video` passes codec/container/quality from `server_config` and expects string paths back; error logging currently bubbles to stdout.
-  - `preprocessing.matanyone.app` passes per-request codec overrides, works exclusively with numpy frame lists, and expects the writer to honour supplied extensions.
+  - `wgp.generate_video` now wraps the helpers to inject the notifications logger and will need to switch metadata persistence once the new interface lands.
+  - `preprocessing.matanyone.app` passes per-request codec overrides and receives the notifications logger from the CLI; metadata output still calls the legacy functions directly.
   - CLI queue tooling records resulting paths in `state["gen"]["file_list"]`; any helper changes must preserve those contracts.
+
+## Metadata Migration Notes
+- `MetadataSaveConfig` should capture the target artifact type (`"video"`, `"image"`, `"audio"`), container override, and any format-specific kwargs (e.g. encoder versions, embedded image payloads).
+- `write_metadata_bundle` will dispatch to:
+  - `shared.utils.video_metadata.save_video_metadata` for MP4/MKV outputs.
+  - `shared.utils.audio_metadata.save_audio_metadata` for audio sidecars (when present).
+  - `shared.utils.audio_video.save_image_metadata` for thumbnail captures (until relocated).
+- The helper should accept a logger (defaulting to the notifications logger) and translate the current `print` statements into `logger.warning`/`logger.error` calls.
+- `ProductionManager`/`wgp` should collect the metadata payloads they currently build (`configs`, `embedded_images`, etc.) and pass them through the new API so queue consumers can override persistence behaviour in the future.
 
 ## Validation
 - Extend smoke tests: run `python -m cli.generate --prompt "smoke test prompt" --dry-run` plus a low-res render to confirm output paths.

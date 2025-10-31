@@ -1,27 +1,18 @@
 import subprocess
 import tempfile, os
+from typing import Callable, Optional
+
 import ffmpeg
-import torchvision.transforms.functional as TF
-import torch.nn.functional as F
-import cv2
-import tempfile
-import imageio
-import binascii
-import torchvision
-import torch
-from PIL import Image
-import os.path as osp
 import json
+from PIL import Image, PngImagePlugin
 
-def rand_name(length=8, suffix=''):
-    name = binascii.b2a_hex(os.urandom(length)).decode('utf-8')
-    if suffix:
-        if not suffix.startswith('.'):
-            suffix = '.' + suffix
-        name += suffix
-    return name
-
-
+from core.io.media import (
+    ImageSaveConfig,
+    VideoSaveConfig,
+    write_image,
+    write_video,
+)
+from shared.utils.notifications import get_notifications_logger
 
 def extract_audio_tracks(source_video, verbose=False, query_only=False):
     """
@@ -221,152 +212,59 @@ def cleanup_temp_audio_files(audio_tracks, verbose=False):
     return deleted_count
 
 
-def save_video(tensor,
-                save_file=None,
-                fps=30,
-                codec_type='libx264_8',
-                container='mp4',
-                nrow=8,
-                normalize=True,
-                value_range=(-1, 1),
-                retry=5):
+def save_video(
+    tensor,
+    save_file=None,
+    fps=30,
+    codec_type='libx264_8',
+    container='mp4',
+    nrow=8,
+    normalize=True,
+    value_range=(-1, 1),
+    retry=5,
+    logger: Optional[Callable[[str], None]] = None,
+):
     """Save tensor as video with configurable codec and container options."""
-        
-    if torch.is_tensor(tensor) and len(tensor.shape) == 4:
-        tensor = tensor.unsqueeze(0)
-        
-    suffix = f'.{container}'
-    cache_file = osp.join('/tmp', rand_name(suffix=suffix)) if save_file is None else save_file
-    if not cache_file.endswith(suffix):
-        cache_file = osp.splitext(cache_file)[0] + suffix
-    
-    # Configure codec parameters
-    codec_params = _get_codec_params(codec_type, container)
-    
-    # Process and save
-    error = None
-    for _ in range(retry):
-        try:
-            if torch.is_tensor(tensor):
-                # Preprocess tensor
-                tensor = tensor.clamp(min(value_range), max(value_range))
-                tensor = torch.stack([
-                    torchvision.utils.make_grid(u, nrow=nrow, normalize=normalize, value_range=value_range)
-                    for u in tensor.unbind(2)
-                ], dim=1).permute(1, 2, 3, 0)
-                tensor = (tensor * 255).type(torch.uint8).cpu()
-                arrays = tensor.numpy()
-            else:
-                arrays = tensor
 
-            # Write video (silence ffmpeg logs)
-            writer = imageio.get_writer(cache_file, fps=fps, ffmpeg_log_level='error', **codec_params)
-            for frame in arrays:
-                writer.append_data(frame)
-        
-            writer.close()
+    config = VideoSaveConfig(
+        fps=fps,
+        codec_type=codec_type,
+        container=container,
+        nrow=nrow,
+        normalize=normalize,
+        value_range=value_range,
+        retry=retry,
+    )
 
-            return cache_file
-            
-        except Exception as e:
-            error = e
-            print(f"error saving {save_file}: {e}")
-
-
-def _get_codec_params(codec_type, container):
-    """Get codec parameters based on codec type and container."""
-    if codec_type == 'libx264_8':
-        return {'codec': 'libx264', 'quality': 8, 'pixelformat': 'yuv420p'}
-    elif codec_type == 'libx264_10':
-        return {'codec': 'libx264', 'quality': 10, 'pixelformat': 'yuv420p'}
-    elif codec_type == 'libx265_28':
-        return {'codec': 'libx265', 'pixelformat': 'yuv420p', 'output_params': ['-crf', '28', '-x265-params', 'log-level=none','-hide_banner', '-nostats']}
-    elif codec_type == 'libx265_8':
-        return {'codec': 'libx265', 'pixelformat': 'yuv420p', 'output_params': ['-crf', '8', '-x265-params', 'log-level=none','-hide_banner', '-nostats']}
-    elif codec_type == 'libx264_lossless':
-        if container == 'mkv':
-            return {'codec': 'ffv1', 'pixelformat': 'rgb24'}
-        else:  # mp4
-            return {'codec': 'libx264', 'output_params': ['-crf', '0'], 'pixelformat': 'yuv444p'}
-    else:  # libx264
-        return {'codec': 'libx264', 'pixelformat': 'yuv420p'}
+    resolved_logger = logger if logger is not None else get_notifications_logger()
+    return write_video(tensor, save_file, config=config, logger=resolved_logger)
 
 
 
 
-def save_image(tensor,
-                save_file,
-                nrow=8,
-                normalize=True,
-                value_range=(-1, 1),
-                quality='jpeg_95',  # 'jpeg_95', 'jpeg_85', 'jpeg_70', 'jpeg_50', 'webp_95', 'webp_85', 'webp_70', 'webp_50', 'png', 'webp_lossless'
-                retry=5):
+def save_image(
+    tensor,
+    save_file,
+    nrow=8,
+    normalize=True,
+    value_range=(-1, 1),
+    quality='jpeg_95',  # 'jpeg_95', 'jpeg_85', 'jpeg_70', 'jpeg_50', 'webp_95', 'webp_85', 'webp_70', 'webp_50', 'png', 'webp_lossless'
+    retry=5,
+    logger: Optional[Callable[[str], None]] = None,
+):
     """Save tensor as image with configurable format and quality."""
 
-    RGBA = tensor.shape[0] == 4
-    if RGBA:
-        quality = "png"
+    config = ImageSaveConfig(
+        nrow=nrow,
+        normalize=normalize,
+        value_range=value_range,
+        quality=quality,
+        retry=retry,
+    )
 
-    # Get format and quality settings
-    format_info = _get_format_info(quality)
-    
-    # Rename file extension to match requested format
-    save_file = osp.splitext(save_file)[0] + format_info['ext']
-    
-    # Save image
-    error = None
-                         
-    for _ in range(retry):
-        try:
-            tensor = tensor.clamp(min(value_range), max(value_range))
-            
-            if format_info['use_pil'] or RGBA:
-                # Use PIL for WebP and advanced options
-                grid = torchvision.utils.make_grid(tensor, nrow=nrow, normalize=normalize, value_range=value_range)
-                # Convert to PIL Image
-                grid = grid.mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to('cpu', torch.uint8).numpy()
-                mode = 'RGBA' if RGBA else 'RGB'
-                img = Image.fromarray(grid, mode=mode)
-                img.save(save_file, **format_info['params'])
-            else:
-                # Use torchvision for JPEG and PNG
-                torchvision.utils.save_image(
-                    tensor, save_file, nrow=nrow, normalize=normalize, 
-                    value_range=value_range, **format_info['params']
-                )
-            break
-        except Exception as e:
-            error = e
-            continue
-    else:
-        print(f'cache_image failed, error: {error}', flush=True)
-    
-    return save_file
+    resolved_logger = logger if logger is not None else get_notifications_logger()
+    return write_image(tensor, save_file, config=config, logger=resolved_logger)
 
-
-def _get_format_info(quality):
-    """Get format extension and parameters."""
-    formats = {
-        # JPEG with PIL (so 'quality' works)
-        'jpeg_95': {'ext': '.jpg', 'params': {'quality': 95}, 'use_pil': True},
-        'jpeg_85': {'ext': '.jpg', 'params': {'quality': 85}, 'use_pil': True},
-        'jpeg_70': {'ext': '.jpg', 'params': {'quality': 70}, 'use_pil': True},
-        'jpeg_50': {'ext': '.jpg', 'params': {'quality': 50}, 'use_pil': True},
-
-        # PNG with torchvision
-        'png': {'ext': '.png', 'params': {}, 'use_pil': False},
-
-        # WebP with PIL (for quality control)
-        'webp_95': {'ext': '.webp', 'params': {'quality': 95}, 'use_pil': True},
-        'webp_85': {'ext': '.webp', 'params': {'quality': 85}, 'use_pil': True},
-        'webp_70': {'ext': '.webp', 'params': {'quality': 70}, 'use_pil': True},
-        'webp_50': {'ext': '.webp', 'params': {'quality': 50}, 'use_pil': True},
-        'webp_lossless': {'ext': '.webp', 'params': {'lossless': True}, 'use_pil': True},
-    }
-    return formats.get(quality, formats['jpeg_95'])
-
-
-from PIL import Image, PngImagePlugin
 
 def _enc_uc(s):
     try: return b"ASCII\0\0\0" + s.encode("ascii")

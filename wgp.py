@@ -29,13 +29,26 @@ import numpy as np
 import importlib
 from shared.bootstrap_defaults import DEFAULT_BOOTSTRAP_VALUES, GENERATION_FALLBACKS
 from core.progress import clear_status, format_duration, get_latest_status, merge_status_context, update_status
-from shared.utils.notifications import notify_debug, notify_info, notify_warning, notify_error
+from shared.utils.notifications import (
+    notify_debug,
+    notify_info,
+    notify_warning,
+    notify_error,
+    get_notifications_logger,
+)
 from shared.utils import notification_sound
 from shared.utils.loras_mutipliers import preparse_loras_multipliers, parse_loras_multipliers
 from shared.utils.utils import convert_tensor_to_image, save_image, get_video_info, get_file_creation_date, convert_image_to_video, calculate_new_dimensions, convert_image_to_tensor, calculate_dimensions_and_resize_image, rescale_and_crop, get_video_frame, resize_and_remove_background, rgb_bw_to_rgba_mask
 from shared.utils.utils import calculate_new_dimensions, get_outpainting_frame_location, get_outpainting_full_area_dimensions
 from shared.utils.utils import has_video_file_extension, has_image_file_extension, has_audio_file_extension
-from shared.utils.audio_video import extract_audio_tracks, combine_video_with_audio_tracks, combine_and_concatenate_video_with_audio_tracks, cleanup_temp_audio_files,  save_video, save_image
+from shared.utils.audio_video import (
+    extract_audio_tracks,
+    combine_video_with_audio_tracks,
+    combine_and_concatenate_video_with_audio_tracks,
+    cleanup_temp_audio_files,
+    save_video as _save_video,
+    save_image as _save_image,
+)
 from shared.notifications import create_legacy_notifier
 from shared.utils.audio_video import save_image_metadata, read_image_metadata
 from core.preview import prepare_preview_inputs
@@ -58,6 +71,27 @@ import inspect
 from shared.utils import prompt_parser
 import base64
 from PIL import Image
+
+
+def save_video(*args, **kwargs):
+    """
+    Wrapper around ``shared.utils.audio_video.save_video`` that ensures logging flows
+    through the notifications logger configured by the CLI.
+    """
+
+    if kwargs.get("logger") is None:
+        kwargs["logger"] = get_notifications_logger()
+    return _save_video(*args, **kwargs)
+
+
+def save_image(*args, **kwargs):
+    """
+    Wrapper around ``shared.utils.audio_video.save_image`` with logger injection.
+    """
+
+    if kwargs.get("logger") is None:
+        kwargs["logger"] = get_notifications_logger()
+    return _save_image(*args, **kwargs)
 import zipfile
 import atexit
 import shutil

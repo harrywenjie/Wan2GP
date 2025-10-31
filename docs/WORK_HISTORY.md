@@ -1,5 +1,9 @@
 # Work History
 
+- Ported the legacy video/image writers into `core/io/media.write_video`/`write_image`, collapsed `shared.utils.audio_video` into logger-aware shims, injected notification loggers through `wgp` and MatAnyOne, and validated with `python -m compileall core/io/media.py shared/utils/audio_video.py shared/utils/notifications.py wgp.py preprocessing/matanyone/app.py`.
+
+- Scaffolded `core/io/media.py` with the media config dataclasses and raising stubs, updated `shared/utils/audio_video.save_video/save_image` to delegate through the new helpers with logger-aware fallbacks, introduced `_legacy_save_*` shims for continuity, and validated syntax with `python -m compileall core/io/media.py shared/utils/audio_video.py`.
+
 - Extracted `get_available_filename` into `core/io.py`, updated `wgp.py` to consume the shared helper, documented the relocation plus `save_*` call-site inventory, and validated with `python -m compileall core/io.py wgp.py`.
 - Created `docs/IO_MEDIA_MIGRATION.md` capturing the `save_video`/`save_image`/metadata extraction strategy, expanded `docs/CONTEXT.md` with dependency notes (codec handling, logger requirements, MatAnyOne overrides), and refreshed `PROJECT_PLAN_LIVE.md` `## Immediate Next Actions` for the next migration step; documentation-only update, no validation needed.
 - Catalogued the remaining `ProductionManager` touchpoints inside `wgp.py` (runtime reload hooks, TaskInputManager dependencies, output persistence helpers, prompt/LoRA prep, queue notifier fallbacks) and updated `PROJECT_PLAN_LIVE.md` / `docs/CONTEXT.md` to stage the `core/io.get_available_filename` extraction; planning-only changes, so no runtime validation executed.

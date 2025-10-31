@@ -80,8 +80,9 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ---
 
 ## Immediate Next Actions
-- Scaffold `core/io/media.py` with `VideoSaveConfig` / `ImageSaveConfig` / `MetadataSaveConfig` dataclasses plus stubbed writer functions that accept injected loggers.
-- Add compatibility shims in `shared.utils.audio_video` that delegate to the new helpers so `wgp` and MatAnyOne can migrate incrementally.
+- Implement `write_metadata_bundle` in `core/io/media`, delegating to the existing `save_*_metadata` helpers through a `MetadataSaveConfig` mapping.
+- Update `shared.utils.audio_video` metadata helpers to call the new core writers and emit logger-aware warnings instead of bare `print`.
+- Swap `wgp` and MatAnyOne to the new metadata interface so the legacy helpers can be retired after validation.
 
 ---
 
