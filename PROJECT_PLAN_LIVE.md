@@ -17,6 +17,30 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 - Headless flow remains CLI → `assemble_generation_params()` → `wgp.generate_video()`; the intermediary “core runner” extraction is still pending. A detailed diagram plus follow-ups live in `docs/APPENDIX_HEADLESS.md`.
 - Model footprint: keep `models/wan` (and associated defaults/presets/settings) plus shared utilities; treat `models/flux`, `models/qwen`, `models/chatterbox`, and `models/ltx_video` as optional until full CLI parity exists; retain only stateless preprocessing helpers under `preprocessing/`.
 - CLI flag reference migrated to `docs/CLI.md`; new runtime toggles should be documented there instead of embedding matrices in this file.
+- Documentation audit confirms GUI theme and queue color references have been removed from maintained guides; no textual cleanup pending for this surface.
+- Queue summaries now annotate attached media (start/end/guide/mask cues) and preview refreshes emit debug logs, eliminating the need for legacy modal HTML helpers in `wgp.py`.
+- Retired the unused queue editing/modal/progress HTML functions (`handle_queue_action`, `refresh_preview`, `show_modal_image`, `create_html_progress_bar`, `update_generation_status`) and removed the `ui.html` shim; CLI telemetry already covers progress reporting.
+- `wgp.initialize_runtime()` now builds a headless default namespace without touching `_parse_args()`, so importing the module no longer consumes CLI flags; callers can re-run the idempotent bootstrap via `ensure_runtime_initialized` while the CLI continues to rely on runtime overrides for per-run tweaks.
+- Removed the orphaned Gradio scaffolding in `wgp.py` (`set_gallery_tab`, `generate_video_tab`, `get_js`, `create_ui`) along with the embedded JS payloads; no GUI-only helpers remain in the headless build.
+- Remaining `ui.*` compatibility helpers (147x `ui.update`, 61x `ui.button`, etc.) are now confined to legacy preset/model management surfaces that the CLI never touches; they remain candidates for deletion or conversion to structured logging.
+- Hoisted `DEFAULT_BOOTSTRAP_VALUES` into `shared/bootstrap_defaults.py`, dropped the defunct `betatest` / `multiple_images` flags, and now import the canonical defaults in `wgp`.
+- Shared the bootstrap module with the CLI and extended `_load_server_config` to seed `check_loras`, `save_masks`, `save_quantized`, `save_speakers`, and `verbose_level` so persistent toggles no longer rely on the runtime namespace.
+- Exposed the persisted runtime toggles (`save_masks`, `save_quantized`, `save_speakers`, `check_loras`) through headless CLI flags that keep `wgp.args` and `server_config` in sync during runs.
+- Normalised the bootstrap defaults for `preload`, `profile`, and `verbose` to integers and hardened `_build_default_args` coercion so downstream code no longer relies on string shims.
+- Queue editing stubs (`move_task`, `remove_task`, `finalize_generation_with_state`) have been removed; `update_queue_data` now returns a plain CLI summary dict so downstream code can introspect without UI components.
+- Remaining `ui.*` usage now lives inside preset/model selection and legacy settings panes that are unreachable from the CLI; queue operations run entirely via CLI-native returns.
+- Removed the prompt wizard/LoRA preset helpers from `wgp.py`, collapsing the compatibility shims and pointing operators to the existing CLI LoRA flags instead of macro-based prompts.
+- Retired the queue load/save/autosave handlers plus their filesystem side effects; the CLI documentation now directs batching workflows toward explicit shell scripting rather than zipped queue archives.
+- Removed the queue editing helpers (`silent_cancel_edit`, `cancel_edit`, `edit_task_in_queue`, `process_prompt_and_add_tasks`, `init_process_queue_if_any`) and deleted the pause-for-edit loop; the CLI queue no longer exposes edit state or `queue_paused_for_edit`.
+- Documentation sweep (`README.md`, `docs/APPENDIX_HEADLESS.md`, `docs/*.md`) turned up no leftover references to queue archives or the prompt wizard; `docs/CLI.md` already notes both removals.
+- Remaining UI-bound helpers fall into four dead zones: (1) generation button/preview gates (`abort_generation`, `prepare_generate_video`, the `ui.text` branch in `process_tasks`) that only impacted the dashboard; (2) LoRA preset editors (`validate_delete_lset`, `validate_save_lset`, `cancel_lset`, `save_lset`, `delete_lset`, `refresh_lora_list`) superseded by CLI flags; (3) media picker/post-processing hooks (`video_to_control_video`, `video_to_source_video`, `image_to_ref_image_*`, `audio_to_source_set`, `apply_post_processing`, `remux_audio`, `use_video_settings`) that correspond to removed upload widgets; and (4) model/preset switches (`record_image_mode_tab`, `load_settings_from_file`, `preload_model_when_switching`, the refresh_* helpers, `detect_auto_save_form`, `generate_dropdown_model_list` + `change_model_*`) which orchestrated UI dropdowns. None have CLI call sites today.
+- Excised `abort_generation`, `prepare_generate_video`, the LoRA preset editors, and the media picker/post-processing helpers; queue state transitions now rely purely on logging and dict returns instead of `ui.*`.
+- Updated `process_tasks` to emit timestamp tuples for preview refreshes so the generator is fully headless while retaining cached previews for debugging.
+- Implemented a CLI `--settings-file` flag that loads JSON or media metadata via `get_settings_from_file`, merges the defaults ahead of CLI overrides, and aborts when the file targets a different model type.
+- Removed the legacy model/preset switching helpers (`record_image_mode_tab`, `switch_image_mode`, `change_model*`, `generate_dropdown_model_list`, `create_models_hierarchy`, etc.); `wgp.py` no longer imports `defaultdict` or returns `ui.dropdown` instances, and `python -m compileall wgp.py` still passes.
+- Prompt enhancement now runs exclusively through `process_prompt_enhancer` inside `generate_video`; the manual `enhance_prompt` trigger along with the prompt-type, resolution/group, auto-save, and LoRA download UI wrappers have been deleted, so CLI configs (or future flags) are the sole control surface for that feature set.
+- Proposed a CLI-facing control surface for the enhancer: add a `--prompt-enhancer` flag mapping to the legacy `"", "T", "I", "TI"` modes (off / text / image / text+image) and introduce a provider selector so the Florence2+LLaMA stack and future cloud LLMs can share the same entry point.
+- Confirmed there are no remaining `ui.update` call sites; `shared.ui_compat` is now effectively idle and can be removed once the last compatibility hooks are collapsed.
 
 ---
 
@@ -37,6 +61,7 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 - **Phase 3 – Clean trailing assets**
   - [In Progress] Remove residual plugin/UI assets (icons + favicon removed; legacy screenshots/theme knobs still pending review).
   - [Done] Update documentation to clarify that plugin-driven experiences are no longer supported and note CLI equivalents if they exist.
+  - [Done] Implemented CLI preview/progress logging (queue summary media annotations + debug preview logs) and deleted the unused HTML helpers alongside the `ui.html` shim.
 
 2. **Carve out a CLI-first core**
    - [In Progress] Relocate queue management, GPU scheduling, and generation routines from `wgp.py` into structured modules under `core/` / `cli/` while keeping CLI behaviour stable.
@@ -47,6 +72,8 @@ The headless build never exposes GUI-driven affordances — video/audio playback
    - [In Progress] Drop or refactor preprocessing tools that still require canvases (`preprocessing/matanyone/` now headless; audit remaining tools).
    - [Pending] Audit models that depend on UI interactivity; remove or gate them until CLI workflows exist.
    - [In Progress] Document file-based inputs for retained models and update loaders (initial docs created; needs per-model validation).
+   - [Planned] Extract the prompt enhancer stack (Florence2 + Llama-based rewrite helper) into a shared module and retire the LTX video diffusion pipeline once the enhancer has a neutral home.
+   - [Planned] Introduce a prompt-enhancer provider abstraction that supports both the existing local models and future cloud LLM endpoints, including configuration for credentials, rate limits, and user-selectable provider flags.
 
 4. **Retire ancillary runtimes**
    - [Pending] Remove Docker scripts (`run-docker-cuda-deb.sh`, `Dockerfile`, etc.) and legacy launch docs once CLI parity covers their use cases.
@@ -81,6 +108,8 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 - Removed direct Gradio usage from Wan/Qwen/Chatterbox model handlers by wiring a shared CLI notifier to the generation logger; confirmed CLI dry-run still passes.
 - Replaced the GPU lock wait notification with a logger/callable hook (`shared/utils/process_locks.py`), updated MatAnyOne to pass a Gradio callback locally, and removed the Gradio-only stats streamer (`shared/utils/stats.py` + related `wgp.py` wiring); validated with `python -m cli.generate --prompt "test" --dry-run`.
 - Routed remaining notification paths in `wgp.py` through `shared.utils.notifications` by swapping `gr.Info`/`gr.Warning`/`gr.Error` for logger-backed helpers and a new `GenerationError`, preserving CLI error reporting; confirmed via `python -m cli.generate --prompt "test prompt" --dry-run`.
+- Removed the dormant `wgp.py` UI hooks (`enhance_prompt`, `refresh_*prompt_type*`, resolution/guidance/auto-save toggles, and `download_lora`), keeping the generation-time `process_prompt_enhancer` flow intact; no runtime validation required for these deletions.
+- Documented the upcoming CLI prompt-enhancer flags/provider abstraction and confirmed `ui.update` no longer appears anywhere, setting the stage to delete `shared/ui_compat.py` once remaining helpers are inlined.
 - Added `shared/ui_compat.py` to encode legacy UI responses as dataclasses, replaced `gr.*` return values across the queue helpers in `wgp.py` with the new compatibility layer, and verified CLI dry-run `python -m cli.generate --prompt "test prompt" --dry-run`.
 - Removed the plugin manager infrastructure (deleted `shared/utils/plugins.py`, `plugins/`, and `plugins.json`; stripped plugin imports/hooks from `wgp.py`); CLI dry-run `python -m cli.generate --prompt "test" --dry-run` still passes.
 - Removed `shared/gradio/*` and replaced `AudioGallery` / `AdvancedMediaGallery` with inline minimal stubs inside `wgp.py`; CLI dry-run `python -m cli.generate --prompt "test" --dry-run` still passes.
@@ -93,11 +122,38 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 - Added `cli/matanyone.py` to expose MatAnyOne mask propagation as a CLI command with logging, path validation, frame/mask/audio controls, and dry-run support; documented the workflow in `docs/CLI.md` and verified the parser with `python -m cli.matanyone --help`.
 - Reorganized `PROJECT_PLAN_LIVE.md` to keep context/responsive sections concise, moved the architecture diagram and follow-ups into `docs/APPENDIX_HEADLESS.md`, and pointed readers to `docs/CLI.md` for the canonical flag surface.
 - Removed the obsolete CLI theme surface (`--theme`, `UI_theme`, `queue_color_scheme`) from `wgp.py`; confirmed the parser via `python -m cli.generate --prompt "smoke test prompt" --dry-run --log-level INFO`.
+- Audited documentation and tracked assets for GUI theme or queue color mentions; none remain, so no textual updates were required this session.
+- Inspected `wgp.py` and `shared/ui_compat.py` for legacy HTML/theme hooks, catalogued the unused preview-modal/progress helpers, and staged follow-up tasks to replace them with CLI logging.
+- Confirmed via `rg` that the preview/modal/progress helpers have no runtime callers, drafted the CLI logging replacement strategy, and updated the roadmap plus next steps accordingly.
+- Updated queue summaries to flag attached media, log thumbnail refreshes at debug level, removed dormant modal/progress helpers (`handle_queue_action`, `refresh_preview`, `show_modal_image`, `create_html_progress_bar`, `update_generation_status`), and dropped `ui.html`; validated with `python -m compileall wgp.py shared/ui_compat.py`.
+- Tallied remaining `ui.*` compatibility usage (e.g., 147 `ui.update`, 61 `ui.button`) within queue editing, wizard, and preset routines, and committed to removing those chains or providing explicit CLI error paths.
+- Excised unused queue editing helpers (`move_task`, `remove_task`, `finalize_generation_with_state`) and converted `update_queue_data` to return a CLI-friendly summary dict rather than `ui.text`.
+- Audited the surviving `ui.*` call sites (prompt wizard, LoRA presets, queue import/autosave) and confirmed they are unreachable via CLI execution; leaning toward removal instead of building equivalent CLI surfaces unless new requirements emerge.
+- Drafted removal proposals covering the prompt wizard/LoRA preset helpers and the queue import/autosave routines so the next iteration can either land CLI replacements or delete the dead UI scaffolding.
+- Removed the prompt wizard/LoRA preset helpers plus queue load/save/autosave handlers from `wgp.py`, pruned the associated constants/imports, refreshed `docs/CLI.md` with LoRA guidance and queue automation notes, and validated the module with `python -m compileall wgp.py`.
+- Audited documentation for lingering queue archive or prompt wizard references; confirmed the updates are confined to `docs/CLI.md` and no additional cleanup is required.
+- Excised the remaining queue editing helpers (`silent_cancel_edit`, `cancel_edit`, `edit_task_in_queue`, `process_prompt_and_add_tasks`, `init_process_queue_if_any`), removed the `queue_paused_for_edit` loop, dropped the now-unused `clean_image_list`, and recompiled `wgp.py` via `python -m compileall wgp.py` to confirm a clean headless build.
+- Removed the lingering dashboard helpers (`abort_generation`, `prepare_generate_video`), LoRA preset editors, media picker/post-processing hooks, and `load_settings_from_file`; rewired `process_tasks` preview yields to timestamp tuples and verified `python -m compileall wgp.py`.
+- Restored the `video_guide_processes` constant in `wgp.py` to resolve the undefined reference surfaced by Pylance after the UI compatibility layer removal; validated with `python -m compileall wgp.py`.
+- Landed CLI prompt enhancer controls by adding `--prompt-enhancer`/`--prompt-enhancer-provider`, wired the selections into `cli.generate.apply_runtime_overrides` and `build_params`, refreshed dry-run reporting, and documented the new surface in `docs/CLI.md`; validated with `python -m compileall cli/generate.py`.
+- Deleted `shared/ui_compat.py`, removed its `wgp.py` import, and confirmed the headless runtime compiles cleanly with `python -m compileall wgp.py`.
+- Added a `--settings-file` CLI flag that merges saved defaults ahead of explicit overrides, updated `docs/CLI.md`, validated parsing with `python -m compileall cli/generate.py`, and exercised the dry-run path via `python -m cli.generate --prompt "test" --dry-run`.
+- Deleted the model/preset switching shims (`record_image_mode_tab`, `switch_image_mode`, `change_model*`, `generate_dropdown_model_list`, `create_models_hierarchy`) and orphaned imports, then recorded the outstanding `ui.update` hotspots (prompt enhancer + prompt-type toggles, resolution/guidance controls, auto-save/video-length hooks) for follow-up; re-ran `python -m compileall wgp.py`.
+- Removed the dormant prompt enhancer UI helpers from `wgp.py`, documented the change in the roadmap (shared prompt enhancer + future cloud providers), and deferred runtime validation because no executable paths were touched.
+- CLI prompt enhancer controls now ship as `--prompt-enhancer` (text/image/combined) with an optional `--prompt-enhancer-provider` flag that maps to `server_config["enhancer_enabled"]` (0=off, 1=Florence2+Llama3.2, 2=Florence2+JoyCaption) while preserving the disabled default when both flags are omitted.
+- Deleted `shared/ui_compat.py`; the headless runtime no longer imports the compatibility layer and `wgp.py` operates purely with CLI returns.
+- Reviewed `wgp.py` for lingering UI scaffolding, documented the `_parse_args` bootstrap side effects and orphaned JS helpers, and refreshed `## Immediate Next Actions` to prioritize splitting the runner from the legacy UI hooks.
+- Replaced the import-time `_parse_args()` side-effects with `_build_default_args()` and `initialize_runtime()`, added `ensure_runtime_initialized()` for idempotent bootstrapping, updated the CLI wrapper to call it, and deleted the final Gradio helpers (`set_gallery_tab`, `generate_video_tab`, `get_js`, `create_ui`); validated via `python -m compileall wgp.py` and `python -m compileall cli/generate.py`.
+- Centralised the bootstrap defaults around `DEFAULT_BOOTSTRAP_VALUES`, added `_load_server_config()` to hydrate config before runtime overrides, updated `cli.generate` to call `ensure_runtime_initialized()`, and refreshed `docs/CLI.md` plus `docs/APPENDIX_HEADLESS.md` with the runtime bootstrap guidance; revalidated via `python -m compileall wgp.py` and `python -m compileall cli/generate.py`.
+- Relocated the bootstrap constants to `shared/bootstrap_defaults.py`, purged the unused `betatest`/`multiple_images` flags, extended `wgp.py` to read persistent toggles from `server_config`, wired `cli/arguments.py` to the shared defaults for help text, and recorded the changes in this plan; validated with `python -m compileall wgp.py cli/arguments.py cli/generate.py shared/bootstrap_defaults.py`.
+- Surface the persisted runtime toggles in `cli.generate` (`--save-masks`, `--save-quantized`, `--save-speakers`, `--check-loras`), normalised `preload`/`profile`/`verbose` bootstrap values to integers, updated docs with the new flags, and verified the modules with `python -m compileall cli/generate.py cli/arguments.py shared/bootstrap_defaults.py wgp.py`.
+- Ensured the CLI toggle overrides remain per-run by keeping them out of `server_config`, refreshed `docs/CLI.md` with the ephemeral contract, and confirmed dry-run/log visibility via `python -m cli.generate --prompt "test" --dry-run --save-masks --no-check-loras`.
 
 ---
 
 ## Immediate Next Actions
-- Audit docs and assets for any remaining references to GUI themes or queue color presets; prune or restate them for the CLI-only workflow.
+- Audit remaining CLI overrides (prompt enhancer, output directory, VRAM profile settings) to document which ones intentionally persist to `wgp_config.json` versus per-run state.
+- Draft the refactor plan to extract the generation runner (`assemble_generation_params` + `generate_video` hand-off) into a CLI-first module without dragging UI globals.
 
 ---
 

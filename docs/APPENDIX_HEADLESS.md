@@ -12,6 +12,14 @@ This appendix captures slower-changing architectural references that support the
            │ argparse input
            ▼
 ┌──────────────────────┐
+│ Runtime Bootstrap    │  ← `wgp.initialize_runtime` / `ensure_runtime_initialized`
+│  • load wgp_config   │
+│  • normalise dirs    │
+│  • seed defaults     │
+└──────────┬───────────┘
+           │ hydrated config
+           ▼
+┌──────────────────────┐
 │ Config Assembly      │  ← consolidates defaults, presets, overrides
 │ (assemble_generation │
 │  _params, CLI args)  │
@@ -43,6 +51,8 @@ This appendix captures slower-changing architectural references that support the
 ```
 
 **Current status:** `cli.generate` feeds directly into `wgp.generate_video()`. Configuration assembly lives in `assemble_generation_params()`, and the dedicated core runner extraction remains to be implemented.
+
+Runtime bootstrap now lives in `wgp.initialize_runtime()`, which loads `wgp_config.json`, migrates legacy settings, and prepares the global defaults. CLI frontends call `wgp.ensure_runtime_initialized()` automatically before applying runtime overrides, and custom scripts should do the same when using lower-level helpers.
 
 **Follow-ups**
 - [Done] Extract reusable config assembly so CLI/UI paths share one code path (`assemble_generation_params()`).

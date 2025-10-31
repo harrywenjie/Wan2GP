@@ -14,6 +14,26 @@ from cli.arguments import parse_cli_args
 from cli.telemetry import configure_logging
 from shared.utils.notifications import configure_notifications
 
+PROMPT_ENHANCER_MODE_MAP = {
+    "text": "T",
+    "image": "I",
+    "text+image": "TI",
+}
+PROMPT_ENHANCER_PROVIDERS = {
+    "llama3_2": 1,
+    "joycaption": 2,
+}
+PROMPT_ENHANCER_PROVIDER_NAMES = {code: name for name, code in PROMPT_ENHANCER_PROVIDERS.items()}
+PROMPT_ENHANCER_PROVIDER_NAMES[0] = None
+
+
+def _resolve_prompt_enhancer_mode(mode: Optional[str]) -> Optional[str]:
+    if mode is None:
+        return None
+    if mode == "off":
+        return ""
+    return PROMPT_ENHANCER_MODE_MAP[mode]
+
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> Namespace:
     return parse_cli_args(argv)
@@ -21,6 +41,8 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> Namespace:
 
 def import_wgp():
     import wgp  # type: ignore  # pylint: disable=import-error
+    if hasattr(wgp, "ensure_runtime_initialized"):
+        wgp.ensure_runtime_initialized()
     return wgp
 
 
@@ -37,6 +59,7 @@ def validate_input_paths(args: Namespace) -> None:
         "audio_guide": "--audio-guide",
         "audio_guide2": "--audio-guide2",
         "audio_source": "--audio-source",
+        "settings_file": "--settings-file",
     }
 
     errors: List[str] = []
@@ -96,6 +119,11 @@ def validate_runtime_overrides(args: Namespace) -> None:
             raise SystemExit("--tea-cache-start-perc requires --tea-cache-level > 0.")
         if not 0 <= args.tea_cache_start_perc <= 100:
             raise SystemExit("--tea-cache-start-perc must be between 0 and 100 (percent).")
+    if args.prompt_enhancer_provider is not None:
+        if args.prompt_enhancer is None:
+            raise SystemExit("--prompt-enhancer-provider requires --prompt-enhancer.")
+        if args.prompt_enhancer == "off":
+            raise SystemExit("--prompt-enhancer-provider is meaningless when --prompt-enhancer is set to 'off'.")
 
 
 def _format_override_value(value: Any) -> str:
@@ -151,10 +179,11 @@ def apply_runtime_overrides(wgp, args: Namespace, logger: Logger) -> Tuple[Dict[
         applied["compile"] = "transformer"
 
     if args.preload is not None:
+        preload_value = max(0, args.preload)
         if hasattr(wgp, "args"):
-            setattr(wgp.args, "preload", str(max(0, args.preload)))
-        summary["preload_mb"] = max(0, args.preload)
-        applied["preload_mb"] = max(0, args.preload)
+            setattr(wgp.args, "preload", preload_value)
+        summary["preload_mb"] = preload_value
+        applied["preload_mb"] = preload_value
     else:
         try:
             summary["preload_mb"] = int(getattr(getattr(wgp, "args", None), "preload", 0))
@@ -179,11 +208,61 @@ def apply_runtime_overrides(wgp, args: Namespace, logger: Logger) -> Tuple[Dict[
     elif args.bf16:
         applied["transformer_dtype_policy"] = "bf16"
 
+    def _runtime_flag(name: str) -> bool:
+        runtime_args = getattr(wgp, "args", None)
+        if runtime_args is None:
+            return False
+        return bool(getattr(runtime_args, name, False))
+
+    for attr in ("save_masks", "save_quantized", "save_speakers"):
+        toggle_choice = getattr(args, attr, None)
+        if toggle_choice is not None:
+            bool_choice = bool(toggle_choice)
+            if hasattr(wgp, "args"):
+                setattr(wgp.args, attr, bool_choice)
+            applied[attr] = bool_choice
+        summary[attr] = bool(toggle_choice) if toggle_choice is not None else _runtime_flag(attr)
+
+    check_loras_choice = getattr(args, "check_loras", None)
+    if check_loras_choice is not None:
+        bool_choice = bool(check_loras_choice)
+        if hasattr(wgp, "args"):
+            setattr(wgp.args, "check_loras", bool_choice)
+        setattr(wgp, "check_loras", bool_choice)
+        applied["check_loras"] = bool_choice
+    summary["check_loras"] = (
+        bool(check_loras_choice)
+        if check_loras_choice is not None
+        else getattr(wgp, "check_loras", _runtime_flag("check_loras"))
+    )
+
     if args.profile is not None:
         summary["profile_override"] = args.profile
         applied["profile_override"] = args.profile
     else:
         summary["profile_override"] = None
+
+    previous_provider_code = wgp.server_config.get("enhancer_enabled", 0)
+    mode_choice = args.prompt_enhancer
+    provider_choice = args.prompt_enhancer_provider
+    if mode_choice is not None:
+        if mode_choice == "off":
+            if previous_provider_code != 0:
+                applied["prompt_enhancer_provider"] = "off"
+            applied["prompt_enhancer_mode"] = "off"
+            wgp.server_config["enhancer_enabled"] = 0
+        else:
+            resolved_provider = provider_choice or "llama3_2"
+            provider_code = PROMPT_ENHANCER_PROVIDERS[resolved_provider]
+            wgp.server_config["enhancer_enabled"] = provider_code
+            applied["prompt_enhancer_mode"] = mode_choice
+            if provider_choice is not None or provider_code != previous_provider_code:
+                applied["prompt_enhancer_provider"] = resolved_provider
+
+    summary["prompt_enhancer_mode"] = mode_choice
+    summary["prompt_enhancer_provider"] = PROMPT_ENHANCER_PROVIDER_NAMES.get(
+        wgp.server_config.get("enhancer_enabled", 0),
+    )
 
     return summary, applied
 
@@ -227,6 +306,49 @@ def build_state(
         "last_resolution_per_group": {},
         "gen": gen_state,
     }
+
+
+def load_settings_defaults(
+    wgp,
+    state: Dict[str, Any],
+    settings_path: Path,
+    logger: Logger,
+) -> Dict[str, Any]:
+    configs, any_media, any_audio = wgp.get_settings_from_file(
+        state,
+        str(settings_path),
+        True,
+        True,
+        True,
+    )
+    if configs is None:
+        raise SystemExit(f"Unsupported settings file: {settings_path}")
+
+    current_model = state["model_type"]
+    file_model = configs.get("model_type", current_model)
+    if file_model != current_model:
+        raise SystemExit(
+            "Settings file targets model "
+            f"'{file_model}', but CLI initialised with '{current_model}'. "
+            "Rerun with --model-type matching the settings file."
+        )
+
+    extracted_images = 0
+    if settings_path.suffix.lower() in {".mp4", ".mkv"}:
+        extracted_images = wgp.extract_and_apply_source_images(str(settings_path), configs)
+
+    wgp.set_model_settings(state, current_model, configs)
+    configs["model_type"] = current_model
+
+    prompt_preview = (configs.get("prompt") or "").replace("\n", " ").strip()
+    source_desc = "audio metadata" if any_audio else "media metadata" if any_media else "JSON settings"
+    logger.info("Loaded %s defaults from %s.", source_desc, settings_path)
+    if prompt_preview:
+        logger.info("Settings prompt preview: %s", prompt_preview[:120])
+    if extracted_images:
+        logger.info("Extracted %d embedded source image(s) from %s.", extracted_images, settings_path.name)
+
+    return configs
 
 
 class LoraResolution(NamedTuple):
@@ -426,14 +548,15 @@ def build_params(
     state: Dict[str, Any],
     activated_loras: Optional[List[str]] = None,
     lora_multipliers: Optional[str] = None,
+    base_settings: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     model_type = state["model_type"]
-    raw_params: Dict[str, Any] = {
-        "prompt": args.prompt,
-        "model_type": model_type,
-        "model_filename": state["model_filename"],
-        "state": state,
-    }
+    raw_params: Dict[str, Any] = dict(base_settings) if base_settings else {}
+    raw_params.pop("state", None)
+    raw_params["prompt"] = args.prompt
+    raw_params["model_type"] = model_type
+    raw_params["model_filename"] = state["model_filename"]
+    raw_params["state"] = state
     if args.negative_prompt is not None:
         raw_params["negative_prompt"] = args.negative_prompt
     if args.resolution is not None:
@@ -469,6 +592,10 @@ def build_params(
     for key, value in path_overrides.items():
         if value is not None:
             raw_params[key] = str(value)
+
+    prompt_enhancer_value = _resolve_prompt_enhancer_mode(args.prompt_enhancer)
+    if prompt_enhancer_value is not None:
+        raw_params["prompt_enhancer"] = prompt_enhancer_value
 
     if activated_loras:
         raw_params["activated_loras"] = activated_loras
@@ -584,6 +711,7 @@ def dry_run_report(
         "video_length",
         "num_inference_steps",
         "guidance_scale",
+        "prompt_enhancer",
         "seed",
         "force_fps",
         "image_start",
@@ -660,14 +788,20 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     output_dir = ensure_output_dirs(wgp, args.output_dir)
     state = build_state(wgp, model_type, model_filename, loras, loras_presets)
+    base_settings: Optional[Dict[str, Any]] = None
+    if args.settings_file is not None:
+        base_settings = load_settings_defaults(wgp, state, args.settings_file, logger)
+        runtime_summary["settings_file"] = str(args.settings_file)
     params = build_params(
         wgp,
         args,
         state,
         activated_loras=lora_resolution.activated or None,
         lora_multipliers=lora_resolution.multipliers,
+        base_settings=base_settings,
     )
 
+    runtime_summary["prompt_enhancer"] = params.get("prompt_enhancer")
     runtime_summary["override_profile"] = params.get("override_profile")
     if params.get("skip_steps_cache_type") == "tea":
         runtime_summary["tea_cache_level"] = params.get("skip_steps_multiplier")
@@ -684,6 +818,17 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         formatted = ", ".join(f"{key}={_format_override_value(value)}" for key, value in applied_runtime.items())
         logger.info("Runtime overrides: %s", formatted)
     logger.debug("Effective runtime configuration: %s", runtime_summary)
+
+    if args.prompt_enhancer is not None:
+        provider_name = runtime_summary.get("prompt_enhancer_provider") or "disabled"
+        if args.prompt_enhancer == "off":
+            logger.info("Prompt enhancer disabled for this run.")
+        else:
+            logger.info(
+                "Prompt enhancer enabled (%s mode via %s).",
+                args.prompt_enhancer,
+                provider_name,
+            )
 
     if lora_resolution.activated:
         logger.info(
@@ -718,6 +863,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     if args.dry_run:
         dry_run_report(params, output_dir, runtime_summary)
+        if args.settings_file is not None:
+            print(f"  settings_file: {args.settings_file}")
         if lora_resolution.preset_name:
             print(f"  applied_lora_preset: {lora_resolution.preset_name}")
         if lora_resolution.missing:

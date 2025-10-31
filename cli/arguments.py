@@ -4,6 +4,20 @@ import argparse
 from pathlib import Path
 from typing import Iterable, Optional
 
+from shared.bootstrap_defaults import DEFAULT_BOOTSTRAP_VALUES
+
+
+def _coerce_int(defaults, key: str, fallback: int) -> int:
+    try:
+        value = defaults.get(key, fallback)
+        return int(value) if value is not None else fallback
+    except (TypeError, ValueError):
+        return fallback
+
+
+_PROFILE_DEFAULT = _coerce_int(DEFAULT_BOOTSTRAP_VALUES, "profile", -1)
+_PRELOAD_DEFAULT = _coerce_int(DEFAULT_BOOTSTRAP_VALUES, "preload", 0)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -18,6 +32,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--negative-prompt",
         default=None,
         help="Optional negative prompt; falls back to preset defaults when omitted.",
+    )
+    parser.add_argument(
+        "--prompt-enhancer",
+        choices=["off", "text", "image", "text+image"],
+        default=None,
+        help="Enable the prompt enhancer (text, image, or combined). Omit to reuse stored defaults.",
+    )
+    parser.add_argument(
+        "--prompt-enhancer-provider",
+        choices=["llama3_2", "joycaption"],
+        default=None,
+        help="Select the prompt enhancer backend. Defaults to llama3_2 when --prompt-enhancer is active.",
     )
     parser.add_argument(
         "--model-type",
@@ -63,6 +89,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Destination directory for generated assets. Defaults to configured outputs/.",
+    )
+    parser.add_argument(
+        "--settings-file",
+        type=Path,
+        default=None,
+        help="Load generation defaults from a saved settings JSON or media file with embedded metadata.",
     )
     parser.add_argument(
         "--image-start",
@@ -158,13 +190,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--profile",
         type=int,
         default=None,
-        help="Override the VRAM/profile budget used during model initialisation.",
+        help=(
+            "Override the VRAM/profile budget used during model initialisation "
+            f"(default {_PROFILE_DEFAULT})."
+        ),
     )
     parser.add_argument(
         "--preload",
         type=int,
         default=None,
-        help="Megabytes of diffusion weights to preload into VRAM (0 disables preloading).",
+        help=(
+            "Megabytes of diffusion weights to preload into VRAM "
+            f"(default {_PRELOAD_DEFAULT}; 0 disables preloading)."
+        ),
     )
     dtype_group = parser.add_mutually_exclusive_group()
     dtype_group.add_argument(
@@ -200,6 +238,62 @@ def build_parser() -> argparse.ArgumentParser:
         help="Percentage of the denoising schedule to apply TeaCache skipping from (0-100).",
     )
     parser.add_argument(
+        "--save-masks",
+        dest="save_masks",
+        action="store_true",
+        default=None,
+        help="Persist intermediate mask assets according to the legacy UI toggle. Defaults to stored preference.",
+    )
+    parser.add_argument(
+        "--no-save-masks",
+        dest="save_masks",
+        action="store_false",
+        default=None,
+        help="Disable mask persistence for this run.",
+    )
+    parser.add_argument(
+        "--save-quantized",
+        dest="save_quantized",
+        action="store_true",
+        default=None,
+        help="Keep freshly quantised transformer weights on disk. Defaults to stored preference.",
+    )
+    parser.add_argument(
+        "--no-save-quantized",
+        dest="save_quantized",
+        action="store_false",
+        default=None,
+        help="Skip saving quantised transformers after this run.",
+    )
+    parser.add_argument(
+        "--save-speakers",
+        dest="save_speakers",
+        action="store_true",
+        default=None,
+        help="Persist extracted speaker tracks (for MMAudio/Chatterbox) when available. Defaults to stored preference.",
+    )
+    parser.add_argument(
+        "--no-save-speakers",
+        dest="save_speakers",
+        action="store_false",
+        default=None,
+        help="Disable speaker track persistence for this run.",
+    )
+    parser.add_argument(
+        "--check-loras",
+        dest="check_loras",
+        action="store_true",
+        default=None,
+        help="Validate LoRA file availability before generation and exit on missing assets.",
+    )
+    parser.add_argument(
+        "--no-check-loras",
+        dest="check_loras",
+        action="store_false",
+        default=None,
+        help="Bypass LoRA availability checks even if stored defaults enable them.",
+    )
+    parser.add_argument(
         "--list-loras",
         action="store_true",
         help="List available LoRA weights for the selected model type and exit.",
@@ -225,6 +319,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--lora-multipliers",
         default=None,
         help="Override the LoRA multipliers string. Accepts the same syntax as legacy UI presets.",
+    )
+    parser.set_defaults(
+        save_masks=None,
+        save_quantized=None,
+        save_speakers=None,
+        check_loras=None,
     )
     return parser
 
