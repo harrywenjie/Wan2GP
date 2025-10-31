@@ -61,4 +61,11 @@ Runtime bootstrap now lives in `wgp.initialize_runtime()`, which loads `wgp_conf
 
 ## Reference Notes
 - CLI flag surface: the canonical list lives in `docs/CLI.md`. Update that document when adding or removing arguments.
-- Model footprint guidance: see `PROJECT_PLAN_LIVE.md` → `## Context And Findings` for the current keep/drop recommendations.
+- Model footprint guidance: see `docs/CONTEXT.md` → `# Detailed Context` for the current keep/drop recommendations.
+
+## Queue Control Harness
+- `cli.queue_controller.QueueController` is the default queue orchestrator; the legacy `wgp.process_tasks` loop has been removed along with the `--legacy-queue` escape hatch.
+- Shared queue helpers (`clear_queue_action`, `generate_queue_summary`, `update_queue_data`) live in `cli.queue_utils`, keeping the CLI controller and `wgp` wrapper aligned.
+- `cli.queue_controller_smoke.run_smoke()` now provisions a temporary `QueueControlServer`, drives the pause/resume/status commands over TCP, and asserts the queue controller returns to the active state; keep this harness in the CI smoke suite to guard the control channel.
+- Default bindings intentionally stay on `127.0.0.1`; only expose the control port beyond loopback when you can wrap it with SSH tunnels or other authenticated transport.
+- Use `cli.queue_control.send_command()` (or the CLI wrapper) to script operational checks or to integrate the control port into higher-level automation once Celery workers are in play.

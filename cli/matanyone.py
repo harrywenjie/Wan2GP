@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from cli.telemetry import configure_logging
+from shared.utils.notifications import configure_notifications
 from preprocessing.matanyone.app import MatAnyOneRequest, generate_masks
 
 
@@ -132,6 +133,7 @@ def _resolve_path(path: Path, description: str) -> Path:
 def main(argv: Optional[Iterable[str]] = None) -> int:
     args = parse_args(argv)
     logger = configure_logging(args.log_level)
+    configure_notifications(logger)
 
     try:
         request = MatAnyOneRequest(

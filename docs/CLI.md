@@ -27,8 +27,8 @@ python -m cli.generate \
 - `--frames INT` – output length in frames. Defaults come from model presets.
 - `--steps INT` – denoising steps; leave unset to reuse preset values.
 - `--guidance-scale FLOAT` – sets all CFG guidance scales uniformly.
-- `--prompt-enhancer {off,text,image,text+image}` – toggle the built-in prompt enhancer. `text` runs the LLM rewrite only, `image` captions the first reference frame, and `text+image` combines both. When omitted the CLI reuses stored defaults (usually disabled).
-- `--prompt-enhancer-provider {llama3_2,joycaption}` – pick which backend to load when the enhancer is active. Defaults to `llama3_2`; requires `--prompt-enhancer`.
+- `--prompt-enhancer {off,text,image,text+image}` – toggle the built-in prompt enhancer. `text` runs the LLM rewrite only, `image` captions the first reference frame, and `text+image` combines both. Overrides apply to the active run only; omit the flag to reuse the persisted default (usually disabled).
+- `--prompt-enhancer-provider {llama3_2,joycaption}` – pick which backend to load when the enhancer is active. Defaults to `llama3_2`; requires `--prompt-enhancer`. Like other runtime toggles this selection is per-run unless written into `wgp_config.json` manually.
 - `--seed INT` – fixed seed for deterministic runs. Use `-1` to request a random seed from the pipeline.
 - `--force-fps {auto,control,source,INT}` – override the output frame rate or reuse preset behaviour.
 
@@ -54,12 +54,13 @@ Every path must reference an existing file; the CLI validates before execution.
 - `--settings-file PATH` – preload defaults from a saved Wan2GP settings JSON or media file with embedded metadata. The CLI merges these values before applying explicit flags and requires the file to target the active `--model-type`.
 
 ### Output Control
-- `--output-dir PATH` – directory where rendered assets are written. When omitted the generator uses the configured default (`save_path` inside `wgp.py`).
+- `--output-dir PATH` – directory where rendered assets are written. Overrides are per-run; each execution falls back to the configured default (`save_path` inside `wgp.py`) unless the flag is provided again.
 
 ### Runtime Controls
+- Unless stated otherwise, runtime toggles act on the current execution only. Persistent defaults continue to originate from `wgp_config.json`; adjust that file directly if you need new baseline behaviour.
 - `--attention {auto,sdpa,sage,sage2,flash,xformers}` – select the attention backend; falls back to the configured default when omitted.
 - `--compile` – enable the torch.compile transformer path (equivalent to setting `server_config["compile"]` to `"transformer"`).
-- `--profile INT` – override the VRAM/profile budget used during model initialisation (matches the legacy profile dropdown).
+- `--profile INT` – override the VRAM/profile budget used during model initialisation (matches the legacy profile dropdown). The CLI applies this override for the current run only.
 - `--preload INT` – preload diffusion weights into VRAM (in megabytes). Use `0` to rely on profile defaults.
 - `--fp16` / `--bf16` – force the transformer weights to the requested dtype for this run. Only one may be active at a time.
 - `--transformer-quantization TEXT` – override transformer quantisation (e.g. `int8`, `fp8`, `none` for full precision).
@@ -74,6 +75,8 @@ Every path must reference an existing file; the CLI validates before execution.
 ### Logging & Utility Flags
 - `--log-level {CRITICAL,ERROR,WARNING,INFO,DEBUG}` – adjust CLI logging verbosity (default `INFO`).
 - `--dry-run` – resolve configuration, print the derived parameters, and exit without generating frames. Use this to validate arguments, file discovery, and preset merges.
+- `--control-port INT` – expose a lightweight TCP control server that accepts pause/resume/status commands while the queue controller is running.
+- `--control-host TEXT` – host/interface bound by the TCP control server (defaults to `127.0.0.1`; change with care if remote access is required).
 
 ### Execution Flow
 1. The CLI parser gathers arguments (see `cli/arguments.py`).
@@ -91,6 +94,13 @@ Every path must reference an existing file; the CLI validates before execution.
 - The headless build no longer supports importing or autosaving Gradio queue archives (`queue.zip`). All queue load/save handlers have been removed from `wgp.py`.
 - Script repeated generations by calling `python -m cli.generate` in loops or job schedulers; the in-memory queue is only managed for the active process.
 - `clear_queue` now affects the live queue state only. The CLI never writes auxiliary queue artifacts to disk, keeping runs deterministic.
+- `python -m cli.queue_controller_smoke` runs a lightweight pause/resume smoke test for the headless queue controller without invoking the full generation pipeline.
+- `python -m cli.queue_control --port <PORT> pause|resume|status|abort` sends control commands to a generation process started with `--control-port <PORT>`. Commands are processed synchronously and responses are returned as plain text (JSON for `status`).
+
+### Queue Control
+- Start the controller with `--control-port` to expose a local TCP endpoint (default host `127.0.0.1`). The CLI logs the active port once the listener is ready.
+- Use `python -m cli.queue_control --port <PORT> pause` to pause the active generation, `resume` to continue, and `status` to retrieve a JSON summary (paused state, in-progress flag, queue length, and last progress status). `abort` signals an abort request.
+- The control channel is intentionally simple: single-line commands, single-line responses. Communication is unencrypted; keep the listener bound to loopback unless you front it with your own secure tunnel.
 
 ## MatAnyOne Mask Propagation (`cli.matanyone`)
 

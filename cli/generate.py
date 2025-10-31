@@ -12,6 +12,12 @@ from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Set, Tuple
 
 from cli.arguments import parse_cli_args
 from cli.telemetry import configure_logging
+from cli.runner import CLIGenerationNotifier, build_send_cmd, make_cli_callback_builder
+from cli.queue_controller import QueueController
+from cli.queue_control_server import QueueControlServer
+from core.production_manager import ProductionManager
+from core.task_inputs import TaskInputManager
+from cli.queue_state import reset_generation_counters, update_queue_tracking
 from shared.utils.notifications import configure_notifications
 
 PROMPT_ENHANCER_MODE_MAP = {
@@ -97,13 +103,13 @@ def validate_input_paths(args: Namespace) -> None:
 
 def ensure_output_dirs(wgp, output_dir: Optional[Path]) -> Path:
     if output_dir is None:
-        return Path(wgp.save_path)
+        default_dir = Path(getattr(wgp, "save_path", Path.cwd() / "outputs"))
+        default_dir.mkdir(parents=True, exist_ok=True)
+        image_default = Path(getattr(wgp, "image_save_path", default_dir))
+        image_default.mkdir(parents=True, exist_ok=True)
+        return default_dir
     target = Path(output_dir)
     target.mkdir(parents=True, exist_ok=True)
-    wgp.server_config["save_path"] = str(target)
-    wgp.server_config["image_save_path"] = str(target)
-    wgp.save_path = str(target)
-    wgp.image_save_path = str(target)
     return target
 
 
@@ -124,6 +130,8 @@ def validate_runtime_overrides(args: Namespace) -> None:
             raise SystemExit("--prompt-enhancer-provider requires --prompt-enhancer.")
         if args.prompt_enhancer == "off":
             raise SystemExit("--prompt-enhancer-provider is meaningless when --prompt-enhancer is set to 'off'.")
+    if args.control_port is not None and args.control_port <= 0:
+        raise SystemExit("--control-port expects a positive integer value.")
 
 
 def _format_override_value(value: Any) -> str:
@@ -310,11 +318,12 @@ def build_state(
 
 def load_settings_defaults(
     wgp,
+    task_inputs: TaskInputManager,
     state: Dict[str, Any],
     settings_path: Path,
     logger: Logger,
 ) -> Dict[str, Any]:
-    configs, any_media, any_audio = wgp.get_settings_from_file(
+    configs, any_media, any_audio = task_inputs.load_settings_from_file(
         state,
         str(settings_path),
         True,
@@ -622,47 +631,6 @@ def build_params(
     return wgp.assemble_generation_params(raw_params, state=state)
 
 
-def build_send_cmd(state: Dict[str, Any], logger: Logger):
-    def send_cmd(command: str, payload: Any = None):
-        if command == "progress":
-            if isinstance(payload, list) and payload:
-                step_info = payload[0]
-                message = payload[1] if len(payload) > 1 else ""
-                if isinstance(step_info, tuple) and len(step_info) == 2:
-                    current, total = step_info
-                    logger.info(
-                        "[progress] %s/%s %s",
-                        current,
-                        total,
-                        message or "",
-                    )
-                else:
-                    logger.info("[progress] %s", message or step_info)
-            return
-        if command == "status":
-            logger.info("[status] %s", payload)
-            return
-        if command == "info":
-            logger.info("[info] %s", payload)
-            return
-        if command == "error":
-            logger.error("[error] %s", payload)
-            raise RuntimeError(str(payload))
-        if command == "output":
-            outputs = state["gen"].get("file_list", [])
-            if outputs:
-                logger.info("[output] %s", outputs[-1])
-            else:
-                logger.debug("[output] event emitted without recorded files")
-            return
-        if command in {"preview", "exit"}:
-            logger.debug("[%s] %s", command, payload)
-            return
-        logger.debug("[event] %s: %s", command, payload)
-
-    return send_cmd
-
-
 def maybe_handle_lora_listing(
     args: Namespace,
     model_type: str,
@@ -788,9 +756,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     output_dir = ensure_output_dirs(wgp, args.output_dir)
     state = build_state(wgp, model_type, model_filename, loras, loras_presets)
+    task_inputs_manager = ProductionManager(wgp_module=wgp).task_inputs()
     base_settings: Optional[Dict[str, Any]] = None
     if args.settings_file is not None:
-        base_settings = load_settings_defaults(wgp, state, args.settings_file, logger)
+        base_settings = load_settings_defaults(
+            wgp,
+            task_inputs_manager,
+            state,
+            args.settings_file,
+            logger,
+        )
         runtime_summary["settings_file"] = str(args.settings_file)
     params = build_params(
         wgp,
@@ -869,12 +844,75 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             print(f"  applied_lora_preset: {lora_resolution.preset_name}")
         if lora_resolution.missing:
             print("  missing_loras_from_preset: " + ", ".join(lora_resolution.missing))
+        if args.control_port is not None:
+            print(f"  control_endpoint: {args.control_host}:{args.control_port}")
         return 0
 
-    task = {"id": 1, "prompt": params["prompt"], "params": params.copy()}
+    notifier = CLIGenerationNotifier(logger=logger, state=state)
     send_cmd = build_send_cmd(state, logger)
-    wgp.generate_video(task, send_cmd, plugin_data={}, **params)
-    outputs = state["gen"].get("file_list", [])
+    output_override = output_dir if args.output_dir is not None else None
+    callback_builder = make_cli_callback_builder(wgp, logger)
+    manager = ProductionManager(
+        wgp_module=wgp,
+        default_notifier=notifier,
+        default_callback_builder=callback_builder,
+        task_input_manager=task_inputs_manager,
+    )
+    controller: QueueController | None = None
+    control_server: QueueControlServer | None = None
+    try:
+        controller = QueueController(
+            manager=manager,
+            state=state,
+            notifier=notifier,
+            callback_builder=callback_builder,
+        )
+        if args.control_port is not None:
+            control_server = QueueControlServer(
+                controller=controller,
+                state=state,
+                logger=logger,
+                host=args.control_host,
+                port=args.control_port,
+            )
+            bound_port = control_server.start()
+            if bound_port != args.control_port:
+                logger.info(
+                    "Queue control port requested %s but bound to %s (likely port=0).",
+                    args.control_port,
+                    bound_port,
+                )
+        outputs = controller.run_single(
+            params,
+            send_cmd=send_cmd,
+            output_dir_override=output_override,
+            image_output_dir_override=output_override,
+        )
+    except KeyboardInterrupt:
+        logger.warning("Generation interrupted by user (Ctrl+C).")
+        if controller is not None:
+            summary = controller.clear_queue()
+            metrics = summary.get("metrics", {})
+            if summary.get("aborted"):
+                logger.info("Signalled abort for active task.")
+            if summary.get("cleared"):
+                logger.info("Cleared pending queued tasks.")
+            logger.debug("Queue metrics after abort: %s", metrics)
+        else:
+            gen_state = state.setdefault("gen", {})
+            if gen_state.get("in_progress"):
+                gen_state["abort"] = True
+            wan_model = getattr(wgp, "wan_model", None)
+            if wan_model is not None and hasattr(wan_model, "_interrupt"):
+                wan_model._interrupt = True
+            queue = gen_state.get("queue", [])
+            reset_generation_counters(gen_state)
+            update_queue_tracking(queue, manager.queue_tracker)
+        print("Generation aborted by user.")
+        return 130
+    finally:
+        if control_server is not None:
+            control_server.stop()
     if outputs:
         logger.info("Generation complete: %s", outputs[-1])
         print(f"Generation complete: {outputs[-1]}")

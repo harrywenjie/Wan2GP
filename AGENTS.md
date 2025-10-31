@@ -13,10 +13,10 @@ All actions should move the codebase toward minimalism, reproducibility, and det
 
 ## Daily Operation
 - At session start, read `PROJECT_PLAN_LIVE.md`:
-  - Review `## Previous Work Summary` for recent changes.
+  - Review `docs/CONTEXT.md` and `docs/WORK_HISTORY.md` for detailed context and recent work.
   - Review `## Immediate Next Actions` for current tasks.
   - Explore relevant parts of the codebase to rebuild working context.
-- Record new insights or architectural notes in `## Context And Findings`.
+- Record new insights or architectural notes in `docs/CONTEXT.md`; keep `PROJECT_PLAN_LIVE.md` focused on current objectives and task lists.
 - Discuss design decisions (architecture, dependency pruning, model coverage) before major edits.
 - When refactoring or removing code, preserve debuggability through logging or CLI flags.
 
@@ -43,12 +43,13 @@ All actions should move the codebase toward minimalism, reproducibility, and det
 ---
 
 ## Validation
-- Follow the live validation guidance documented in `PROJECT_PLAN_LIVE.md` (see `## Validation Expectations`) and record outcomes under **`## Previous Work Summary`**.
+- Follow the live validation guidance documented in `PROJECT_PLAN_LIVE.md` (see `## Validation Expectations`) and record outcomes in **`docs/WORK_HISTORY.md`**.
 - Add minimal validation scripts only when necessary; remove them once higher-level automation exists.
 
 ---
 
 ## Documentation & Communication
 - Treat `PROJECT_PLAN_LIVE.md` as the authoritative session log; use `README.md` and `docs/*` (e.g. `docs/CLI.md`, `docs/APPENDIX_HEADLESS.md`) as the current headless CLI references and update them when workflows change.
-- Follow `## Handoff Protocol` in `PROJECT_PLAN_LIVE.md` for both task execution and documentation.
+- Use `docs/WORK_HISTORY.md` for detailed session logs and `docs/CONTEXT.md` for expanded architectural notes; keep `PROJECT_PLAN_LIVE.md` focused on current objectives, roadmap, and task lists.
+- Follow `## Handoff Protocol` in `PROJECT_PLAN_LIVE.md`; ensure `## Immediate Next Actions` always lists the next concrete tasks before you stop.
 - Keep sensitive artifacts (weights, media, tokens) **out of version control**; document required paths and environment variables explicitly.

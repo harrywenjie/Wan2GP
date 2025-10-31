@@ -37,13 +37,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--prompt-enhancer",
         choices=["off", "text", "image", "text+image"],
         default=None,
-        help="Enable the prompt enhancer (text, image, or combined). Omit to reuse stored defaults.",
+        help=(
+            "Enable the prompt enhancer (text, image, or combined). Overrides apply to this run only; "
+            "omit to reuse stored defaults from wgp_config.json."
+        ),
     )
     parser.add_argument(
         "--prompt-enhancer-provider",
         choices=["llama3_2", "joycaption"],
         default=None,
-        help="Select the prompt enhancer backend. Defaults to llama3_2 when --prompt-enhancer is active.",
+        help=(
+            "Select the prompt enhancer backend for this run. Defaults to llama3_2 when --prompt-enhancer "
+            "is active; per-run override only."
+        ),
     )
     parser.add_argument(
         "--model-type",
@@ -88,7 +94,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         type=Path,
         default=None,
-        help="Destination directory for generated assets. Defaults to configured outputs/.",
+        help=(
+            "Destination directory for generated assets. Overrides are per-run; next execution falls back to "
+            "the configured save_path unless provided again."
+        ),
     )
     parser.add_argument(
         "--settings-file",
@@ -176,6 +185,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the resolved configuration without starting generation.",
     )
     parser.add_argument(
+        "--control-port",
+        type=int,
+        default=None,
+        help="Expose a TCP control server on the given port for pause/resume/status commands.",
+    )
+    parser.add_argument(
+        "--control-host",
+        default="127.0.0.1",
+        help="Host interface for the TCP control server (default: 127.0.0.1).",
+    )
+    parser.add_argument(
         "--attention",
         choices=["auto", "sdpa", "sage", "sage2", "flash", "xformers"],
         default=None,
@@ -191,8 +211,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help=(
-            "Override the VRAM/profile budget used during model initialisation "
-            f"(default {_PROFILE_DEFAULT})."
+            "Override the VRAM/profile budget used during model initialisation for this execution "
+            f"(default {_PROFILE_DEFAULT} when omitted)."
         ),
     )
     parser.add_argument(

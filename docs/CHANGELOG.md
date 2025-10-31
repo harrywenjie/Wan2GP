@@ -3,6 +3,7 @@
 This changelog tracks the ongoing transition of Wan2GP from a Gradio-first application to a deterministic, command line video generator. Legacy release notes that referenced the web UI, plugin catalogue, or Hunyuan-derived features have been removed to avoid confusion.
 
 ## 2025-02-17
+- Removed `core.queue_state` (all consumers now import `cli.queue_state`); update downstream scripts/doc references accordingly.
 - Replaced the legacy documentation set with CLI-focused guidance (`README.md`, `docs/CLI.md`).
 - Removed the plugin manual and associated references; the plugin subsystem has been fully excised from the codebase.
 - Pruned historical release notes that referenced HyVideo/Hunyuan modules and other retired UI-exclusive features.

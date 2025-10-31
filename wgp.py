@@ -28,6 +28,7 @@ import json
 import numpy as np
 import importlib
 from shared.bootstrap_defaults import DEFAULT_BOOTSTRAP_VALUES, GENERATION_FALLBACKS
+from core.progress import clear_status, format_duration, get_latest_status, merge_status_context, update_status
 from shared.utils.notifications import notify_debug, notify_info, notify_warning, notify_error
 from shared.utils import notification_sound
 from shared.utils.loras_mutipliers import preparse_loras_multipliers, parse_loras_multipliers
@@ -35,13 +36,16 @@ from shared.utils.utils import convert_tensor_to_image, save_image, get_video_in
 from shared.utils.utils import calculate_new_dimensions, get_outpainting_frame_location, get_outpainting_full_area_dimensions
 from shared.utils.utils import has_video_file_extension, has_image_file_extension, has_audio_file_extension
 from shared.utils.audio_video import extract_audio_tracks, combine_video_with_audio_tracks, combine_and_concatenate_video_with_audio_tracks, cleanup_temp_audio_files,  save_video, save_image
+from shared.notifications import create_legacy_notifier
 from shared.utils.audio_video import save_image_metadata, read_image_metadata
+from core.preview import prepare_preview_inputs
+from core.task_inputs import SaveInputsPayload, SaveInputsRequest, TaskInputManager
 from shared.utils.audio_metadata import save_audio_metadata, read_audio_metadata
 from shared.utils.video_metadata import save_video_metadata
 from shared.match_archi import match_nvidia_architecture
 from shared.attention import get_attention_modes, get_supported_attention_modes
 from shared.utils.utils import truncate_for_filesystem, sanitize_file_name, process_images_multithread, get_default_workers
-from shared.utils.process_locks import acquire_GPU_ressources, release_GPU_ressources, gen_lock
+from shared.utils.process_locks import acquire_GPU_ressources, get_gen_info, release_GPU_ressources, gen_lock
 from huggingface_hub import hf_hub_download, snapshot_download
 from shared.utils import files_locator as fl 
 import torch
@@ -52,7 +56,6 @@ import typing
 import inspect
 from shared.utils import prompt_parser
 import base64
-import io
 from PIL import Image
 import zipfile
 import atexit
@@ -67,8 +70,14 @@ import requests
 # import torch._dynamo as dynamo
 # dynamo.config.recompile_limit = 2000   # default is 256
 # dynamo.config.accumulated_recompile_limit = 2000  # or whatever limit you want
+from cli.queue_utils import (
+    clear_queue_action as cli_clear_queue_action,
+    generate_queue_summary as cli_generate_queue_summary,
+    update_queue_data as cli_update_queue_data,
+    get_preview_images,
+    update_task_thumbnails,
+)
 
-global_queue_ref = []
 target_mmgp_version = "3.6.7"
 WanGP_version = "9.21"
 settings_version = 2.39
@@ -137,6 +146,7 @@ unique_id = 0
 unique_id_lock = threading.Lock()
 offloadobj = enhancer_offloadobj = wan_model = None
 reload_needed = True
+_task_inputs_manager: TaskInputManager | None = None
 
 def set_wgp_global(variable_name: str, new_value: any) -> str:
     if variable_name not in globals():
@@ -204,19 +214,6 @@ def download_ffmpeg():
                 os.rename(f, os.path.basename(f))
     os.remove(zip_name)
 
-
-def format_time(seconds):
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-
-    if hours > 0:
-        return f"{hours}h {minutes:02d}m {secs:02d}s"
-    elif seconds >= 60:
-        return f"{minutes}m {secs:02d}s"
-    else:
-        return f"{seconds:.1f}s"
-
 def format_generation_time(seconds):
     """Format generation time showing raw seconds with human-readable time in parentheses when over 60s"""
     raw_seconds = f"{int(seconds)}s"
@@ -235,34 +232,6 @@ def format_generation_time(seconds):
     
     return f"{raw_seconds} ({human_readable})"
 
-def pil_to_base64_uri(pil_image, format="png", quality=75):
-    if pil_image is None:
-        return None
-
-    if isinstance(pil_image, str):
-        from shared.utils.utils import get_video_frame
-        pil_image = get_video_frame(pil_image, 0)
-
-    buffer = io.BytesIO()
-    try:
-        img_to_save = pil_image
-        if format.lower() == 'jpeg' and pil_image.mode == 'RGBA':
-            img_to_save = pil_image.convert('RGB')
-        elif format.lower() == 'png' and pil_image.mode not in ['RGB', 'RGBA', 'L', 'P']:
-             img_to_save = pil_image.convert('RGBA')
-        elif pil_image.mode == 'P':
-             img_to_save = pil_image.convert('RGBA' if 'transparency' in pil_image.info else 'RGB')
-        if format.lower() == 'jpeg':
-            img_to_save.save(buffer, format=format, quality=quality)
-        else:
-            img_to_save.save(buffer, format=format)
-        img_bytes = buffer.getvalue()
-        encoded_string = base64.b64encode(img_bytes).decode("utf-8")
-        return f"data:image/{format.lower()};base64,{encoded_string}"
-    except Exception as e:
-        print(f"Error converting PIL to base64: {e}")
-        return None
-
 def is_integer(n):
     try:
         float(n)
@@ -275,39 +244,6 @@ def compute_sliding_window_no(current_video_length, sliding_window_size, discard
     left_after_first_window = current_video_length - sliding_window_size + discard_last_frames
     return 1 + math.ceil(left_after_first_window / (sliding_window_size - discard_last_frames - reuse_frames))
 
-
-
-
-
-
-def get_preview_images(inputs):
-    inputs_to_query = ["image_start", "video_source", "image_end",  "video_guide", "image_guide", "video_mask", "image_mask", "image_refs" ]
-    labels = ["Start Image", "Video Source", "End Image", "Video Guide", "Image Guide", "Video Mask", "Image Mask", "Image Reference"]
-    start_image_data = None
-    start_image_labels = []
-    end_image_data = None
-    end_image_labels = []
-    for label, name in  zip(labels,inputs_to_query):
-        image= inputs.get(name, None)
-        if image is not None:
-            image= [image] if not isinstance(image, list) else image.copy()
-            if start_image_data == None:
-                start_image_data = image
-                start_image_labels += [label] * len(image)
-            else:
-                if end_image_data == None:
-                    end_image_data = image
-                else:
-                    end_image_data += image 
-                end_image_labels += [label] * len(image)
-
-    if start_image_data != None and len(start_image_data) > 1 and  end_image_data  == None:
-        end_image_data = start_image_data [1:]
-        end_image_labels = start_image_labels [1:]
-        start_image_data = start_image_data [:1] 
-        start_image_labels = start_image_labels [:1] 
-    return start_image_data, end_image_data, start_image_labels, end_image_labels 
-
 def add_video_task(**inputs):
     global task_id
     state = inputs["state"]
@@ -316,10 +252,11 @@ def add_video_task(**inputs):
     task_id += 1
     current_task_id = task_id
 
-    start_image_data, end_image_data, start_image_labels, end_image_labels = get_preview_images(inputs)
+    preview = get_preview_images(inputs)
+    preview_payload = preview.build_payload()
     plugin_data = inputs.pop('plugin_data', {})
     
-    queue.append({
+    queue_entry = {
         "id": current_task_id,
         "params": inputs.copy(),
         "plugin_data": plugin_data,
@@ -327,151 +264,40 @@ def add_video_task(**inputs):
         "length": inputs.get("video_length",0) or 0, 
         "steps": inputs.get("num_inference_steps",0) or 0,
         "prompt": inputs.get("prompt", ""),
-        "start_image_labels": start_image_labels,
-        "end_image_labels": end_image_labels,
-        "start_image_data": start_image_data,
-        "end_image_data": end_image_data,
-        "start_image_data_base64": [pil_to_base64_uri(img, format="jpeg", quality=70) for img in start_image_data] if start_image_data != None else None,
-        "end_image_data_base64": [pil_to_base64_uri(img, format="jpeg", quality=70) for img in end_image_data] if end_image_data != None else None
-    })
+        "start_image_data": preview.start_data,
+        "end_image_data": preview.end_data,
+    }
+    queue_entry.update(preview_payload)
+    queue.append(queue_entry)
 
-def update_task_thumbnails(task,  inputs):
-    start_image_data, end_image_data, start_labels, end_labels = get_preview_images(inputs)
-
-    task.update({
-        "start_image_labels": start_labels,
-        "end_image_labels": end_labels,
-        "start_image_data_base64": [pil_to_base64_uri(img, format="jpeg", quality=70) for img in start_image_data] if start_image_data != None else None,
-        "end_image_data_base64": [pil_to_base64_uri(img, format="jpeg", quality=70) for img in end_image_data] if end_image_data != None else None
-    })
-
-    attachment_labels = []
-    for label in start_labels or []:
-        if label and label not in attachment_labels:
-            attachment_labels.append(label)
-    for label in end_labels or []:
-        if label and label not in attachment_labels:
-            attachment_labels.append(label)
-
-    task_identifier = task.get("id")
-    task_label = str(task_identifier) if task_identifier is not None else "<unknown>"
-    if attachment_labels:
-        notify_debug(
-            f"Queue task {task_label} preview assets updated: {', '.join(attachment_labels)}"
-        )
-    else:
-        notify_debug(f"Queue task {task_label} preview assets cleared.")
-
-def update_global_queue_ref(queue):
-    global global_queue_ref
-    with lock:
-        global_queue_ref = queue[:]
-
+def _interrupt_active_model():
+    global wan_model
+    if wan_model is not None and hasattr(wan_model, "_interrupt"):
+        wan_model._interrupt = True
 
 
 def clear_queue_action(state):
-    gen = get_gen_info(state)
-    queue = gen.get("queue", [])
-    aborted_current = False
-    cleared_pending = False
+    """
+    Legacy wrapper preserved for compatibility with scripts that still import
+    `wgp.clear_queue_action`. Internally delegates to the CLI helper so the
+    queue clearing behaviour stays in sync with the headless controller.
+    """
 
-    with lock:
-        if "in_progress" in gen and gen["in_progress"]:
-            print("Clear Queue: Signalling abort for in-progress task.")
-            gen["abort"] = True
-            gen["extra_orders"] = 0
-            if wan_model is not None:
-                wan_model._interrupt = True
-            aborted_current = True
-
-        if queue:
-             if len(queue) > 1 or (len(queue) == 1 and queue[0] is not None and queue[0].get('id') is not None):
-                 print(f"Clear Queue: Clearing {len(queue)} tasks from queue.")
-                 queue.clear()
-                 cleared_pending = True
-             else:
-                 pass
-
-        if aborted_current or cleared_pending:
-            gen["prompts_max"] = 0
-
-    if aborted_current and cleared_pending:
-        notify_info("Queue cleared and current generation aborted.")
-    elif aborted_current:
-        notify_info("Current generation aborted.")
-    elif cleared_pending:
-        notify_info("Queue cleared.")
-    else:
-        notify_info("Queue is already empty or only contains the active task (which wasn't aborted now).")
-
-    return update_queue_data([])
-
-
-
-
+    result = cli_clear_queue_action(
+        state,
+        lock=lock,
+        interrupt_callback=_interrupt_active_model,
+    )
+    return {k: result[k] for k in result if k in {"queue_summary", "queue_length"}}
 
 
 def generate_queue_summary(queue):
-    """
-    Produce a plain-text snapshot of the queued tasks for CLI consumption.
+    return cli_generate_queue_summary(queue)
 
-    The first entry in the queue represents the active task; subsequent entries
-    are displayed with their prompt, repeat count, and high-level metadata.
-    """
-    if len(queue) <= 1:
-        return "Queue is empty."
-
-    def _normalize_prompt(text: typing.Any) -> str:
-        if text is None:
-            return "<empty>"
-        prompt_text = str(text).replace("\n", " ").strip()
-        if not prompt_text:
-            return "<empty>"
-        if len(prompt_text) > 64:
-            return prompt_text[:61] + "..."
-        return prompt_text
-
-    header = f"{'Row':>3}  {'Task':>6}  {'Rpt':>3}  {'Frames':>6}  {'Steps':>5}  {'Start':>5}  {'End':>3}  Prompt"
-    lines = ["Queued tasks:", "", header, "-" * len(header)]
-
-    for index, item in enumerate(queue[1:], start=1):
-        task_id = item.get("id", index)
-        repeats = item.get("repeats", 1)
-        length = item.get("length", "-")
-        steps = item.get("steps", "-")
-        start_flag = "yes" if item.get("start_image_data_base64") else "no"
-        end_flag = "yes" if item.get("end_image_data_base64") else "no"
-        prompt_text = _normalize_prompt(item.get("prompt"))
-        task_display = str(task_id)
-        if len(task_display) > 6:
-            task_display = task_display[-6:]
-        attachment_labels = []
-        for label in item.get("start_image_labels") or []:
-            if label and label not in attachment_labels:
-                attachment_labels.append(label)
-        for label in item.get("end_image_labels") or []:
-            if label and label not in attachment_labels:
-                attachment_labels.append(label)
-        media_suffix = ""
-        if attachment_labels:
-            media_suffix = " [" + ", ".join(attachment_labels) + "]"
-
-        lines.append(
-            f"{index:>3}  {task_display:>6}  {str(repeats):>3}  {str(length):>6}  {str(steps):>5}  {start_flag:>5}  {end_flag:>3}  {prompt_text}"
-            + media_suffix
-        )
-
-    lines.append("")
-    lines.append(f"Total queued entries (excluding active): {len(queue) - 1}")
-    return "\n".join(lines)
 
 def update_queue_data(queue):
-    update_global_queue_ref(queue)
-    summary = generate_queue_summary(queue)
-    return {
-        "queue_summary": summary,
-        "queue_length": max(len(queue) - 1, 0),
-    }
+    result = cli_update_queue_data(queue)
+    return {k: result[k] for k in result if k in {"queue_summary", "queue_length"}}
 
 
 def _load_server_config():
@@ -1624,19 +1450,21 @@ offload.default_verboseLevel = verbose_level
 
 def check_loras_exist(model_type, loras_choices_files, download = False, send_cmd = None):
     lora_dir = get_lora_dir(model_type)
+    manager = _get_task_inputs_manager()
+    cache = manager.get_loras_url_cache()
     missing_local_loras = []
     missing_remote_loras = []
     for lora_file in loras_choices_files:
         local_path = os.path.join(lora_dir, os.path.basename(lora_file))
         if not os.path.isfile(local_path):
-            url = loras_url_cache.get(local_path, None)         
+            url = cache.get(local_path)
             if url is not None:
                 if download:
                     if send_cmd is not None:
                         send_cmd("status", f'Downloading Lora {os.path.basename(lora_file)}...')
                     try:
                         download_file(url, local_path)
-                    except:
+                    except Exception:
                         missing_remote_loras.append(lora_file)
             else:
                 missing_local_loras.append(lora_file)
@@ -1971,95 +1799,6 @@ def release_RAM():
         release_model()
         notify_info("Models stored in RAM have been released")
 
-def get_gen_info(state):
-    cache = state.get("gen", None)
-    if cache == None:
-        cache = dict()
-        state["gen"] = cache
-    return cache
-
-def build_callback(state, pipe, send_cmd, status, num_inference_steps):
-    gen = get_gen_info(state)
-    gen["num_inference_steps"] = num_inference_steps
-    start_time = time.time()    
-    def callback(step_idx = -1, latent = None, force_refresh = True, read_state = False, override_num_inference_steps = -1, pass_no = -1, denoising_extra =""):
-        in_pause = False
-        with gen_lock:
-            process_status = gen.get("process_status", None)
-            pause_msg = None
-            if process_status.startswith("request:"):        
-                gen["process_status"] = "process:" + process_status[len("request:"):]
-                offloadobj.unload_all()
-                pause_msg = gen.get("pause_msg", "Unknown Pause")
-                in_pause = True
-
-        if in_pause:
-            send_cmd("progress", [0, pause_msg])
-            while True:
-                time.sleep(0.1)            
-                with gen_lock:
-                    process_status = gen.get("process_status", None)
-                    if process_status == "process:main": break
-            force_refresh = True
-        refresh_id =  gen.get("refresh", -1)
-        if force_refresh or step_idx >= 0:
-            pass
-        else:
-            refresh_id =  gen.get("refresh", -1)
-            if refresh_id < 0:
-                return
-            UI_refresh = state.get("refresh", 0)
-            if UI_refresh >= refresh_id:
-                return  
-        if override_num_inference_steps > 0:
-            gen["num_inference_steps"] = override_num_inference_steps
-            
-        num_inference_steps = gen.get("num_inference_steps", 0)
-        status = gen["progress_status"]
-        state["refresh"] = refresh_id
-        if read_state:
-            phase, step_idx  = gen["progress_phase"] 
-        else:
-            step_idx += 1         
-            if gen.get("abort", False):
-                # pipe._interrupt = True
-                phase = "Aborting"    
-            elif step_idx  == num_inference_steps:
-                phase = "VAE Decoding"    
-            else:
-                if pass_no <=0:
-                    phase = "Denoising"
-                elif pass_no == 1:
-                    phase = "Denoising First Pass"
-                elif pass_no == 2:
-                    phase = "Denoising Second Pass"
-                elif pass_no == 3:
-                    phase = "Denoising Third Pass"
-                else:
-                    phase = f"Denoising {pass_no}th Pass"
-
-                if len(denoising_extra) > 0: phase += " | " + denoising_extra
-
-            gen["progress_phase"] = (phase, step_idx)
-        status_msg = merge_status_context(status, phase)      
-
-        elapsed_time = time.time() - start_time
-        status_msg = merge_status_context(status, f"{phase} | {format_time(elapsed_time)}")              
-        if step_idx >= 0:
-            progress_args = [(step_idx , num_inference_steps) , status_msg  ,  num_inference_steps]
-        else:
-            progress_args = [0, status_msg]
-        
-        # progress(*progress_args)
-        send_cmd("progress", progress_args)
-        if latent != None:
-            latent = latent.to("cpu", non_blocking=True)
-            send_cmd("preview", latent)
-            
-        # gen["progress_args"] = progress_args
-            
-    return callback
-
 def pack_audio_gallery_state(*_args, **_kwargs):
     raise RuntimeError('Audio gallery state management was removed in the headless build.')
 
@@ -2077,36 +1816,11 @@ def get_default_video_info():
 
 
 def get_file_list(state, input_file_list, audio_files = False):
-    gen = get_gen_info(state)
-    with lock:
-        if audio_files:
-            file_list_name = "audio_file_list"
-            file_settings_name = "audio_file_settings_list"
-        else:
-            file_list_name = "file_list"
-            file_settings_name = "file_settings_list"
-
-        if file_list_name in gen:
-            file_list = gen[file_list_name]
-            file_settings_list = gen[file_settings_name]
-        else:
-            file_list = []
-            file_settings_list = []
-            if input_file_list != None:
-                for file_path in input_file_list:
-                    if isinstance(file_path, tuple): file_path = file_path[0]
-                    file_settings, _, _ = get_settings_from_file(state, file_path, False, False, False)
-                    file_list.append(file_path)
-                    file_settings_list.append(file_settings)
- 
-            gen[file_list_name] = file_list 
-            gen[file_settings_name] = file_settings_list 
-    return file_list, file_settings_list
+    manager = _get_task_inputs_manager()
+    return manager.get_file_list(state, input_file_list, audio_files=audio_files)
 
 def set_file_choice(gen, file_list, choice, audio_files = False):
-    if len(file_list) > 0: choice = max(choice,0)
-    gen["audio_last_selected" if audio_files else "last_selected"] = (choice + 1) >= len(file_list)
-    gen["audio_selected" if audio_files else "selected"] = choice
+    TaskInputManager.set_file_choice(gen, file_list, choice, audio_files=audio_files)
 
 def select_audio(state, audio_files_paths, audio_file_selected):
     gen = get_gen_info(state)
@@ -2661,7 +2375,8 @@ def edit_video(
 		
 		
     MMAudio_setting = MMAudio_setting or 0
-    configs, _ , _ = get_settings_from_file(state, video_source, False, False, False)
+    task_inputs_manager = _get_task_inputs_manager()
+    configs, _, _ = task_inputs_manager.load_settings_from_file(state, video_source, False, False, False)
     if configs == None: configs = { "type" : get_model_record("Post Processing") }
 
     has_already_audio = False
@@ -2786,7 +2501,7 @@ def edit_video(
             seed = set_seed(-1)
     if has_already_audio:
         cleanup_temp_audio_files(audio_tracks)
-    clear_status(state)
+    notifier.reset_progress(state)
 
 def get_overridden_attention(model_type):
     model_def = get_model_def(model_type)
@@ -2965,6 +2680,8 @@ def generate_video(
     model_filename,
     mode,
     plugin_data=None,
+    notifier=None,
+    callback_builder=None,
 ):
 
 
@@ -2990,6 +2707,13 @@ def generate_video(
         audio_file_list = gen["audio_file_list"]
         audio_file_settings_list = gen["audio_file_settings_list"]
 
+    if notifier is None:
+        notifier = create_legacy_notifier(
+            clear_status_fn=clear_status,
+            update_task_thumbnails_fn=update_task_thumbnails,
+            notification_sound_module=notification_sound,
+            server_config=server_config,
+        )
 
     model_def = get_model_def(model_type) 
     is_image = image_mode > 0
@@ -3572,9 +3296,20 @@ def generate_video(
                 new_image_refs = None
 
             if len(refresh_preview) > 0:
-                new_inputs= locals()
-                new_inputs.update(refresh_preview)
-                update_task_thumbnails(task, new_inputs)
+                preview_inputs = prepare_preview_inputs(
+                    {
+                        "image_start": image_start,
+                        "video_source": video_source,
+                        "image_end": image_end,
+                        "video_guide": video_guide,
+                        "image_guide": image_guide,
+                        "video_mask": video_mask,
+                        "image_mask": image_mask,
+                        "image_refs": image_refs,
+                    },
+                    refresh_preview,
+                )
+                notifier.refresh_preview(task, preview_inputs)
                 send_cmd("output")
 
             if window_no ==  1:                
@@ -3586,7 +3321,13 @@ def generate_video(
             gen["progress_status"] = status
             progress_phase = "Generation Audio" if audio_only else "Encoding Prompt"
             gen["progress_phase"] = (progress_phase , -1 )
-            callback = build_callback(state, trans, send_cmd, status, num_inference_steps)
+            callback = None
+            if callback_builder is not None:
+                try:
+                    callback = callback_builder(state, send_cmd, status, num_inference_steps)
+                except Exception as callback_exc:
+                    notify_warning(f"Progress callback builder failed ({callback_exc}); disabling progress updates.")
+                    callback = None
             progress_args = [0, merge_status_context(status, progress_phase )]
             send_cmd("progress", progress_args)
 
@@ -3727,7 +3468,7 @@ def generate_video(
                 tb = traceback.format_exc().split('\n')[:-1] 
                 print('\n'.join(tb))
                 send_cmd("error", new_error)
-                clear_status(state)
+                notifier.reset_progress(state)
                 return
 
             if skip_steps_cache != None :
@@ -3930,21 +3671,12 @@ def generate_video(
                         gen["last_was_audio"] = audio_only
 
                 embedded_images = None
-                # Play notification sound for single video
-                try:
-                    if server_config.get("notification_sound_enabled", 0):
-                        volume = server_config.get("notification_sound_volume", 50)
-                        notification_sound.notify_video_completion(
-                            video_path=video_path, 
-                            volume=volume
-                        )
-                except Exception as e:
-                    print(f"Error playing notification sound for individual video: {e}")
+                notifier.notify_video_ready(video_path=video_path)
 
                 send_cmd("output")
 
         seed = set_seed(-1)
-    clear_status(state)
+    notifier.reset_progress(state)
     trans.cache = None
     offload.unload_loras_from_model(trans_lora)
     if not trans2_lora is None:
@@ -3997,395 +3729,42 @@ def generate_preview(model_type, latents):
     return images
 
 
-def process_tasks(state):
-    from shared.utils.thread_utils import AsyncStream, async_run
-
-    gen = get_gen_info(state)
-    queue = gen.get("queue", [])
-    progress = None
-
-    if len(queue) == 0:
-        gen["status_display"] =  False
-        return
-    with lock:
-        gen = get_gen_info(state)
-        clear_file_list = server_config.get("clear_file_list", 0)
-
-        def truncate_list(file_list, file_settings_list, choice):
-            if clear_file_list > 0:
-                file_list_current_size = len(file_list)
-                keep_file_from = max(file_list_current_size - clear_file_list, 0)
-                files_removed = keep_file_from
-                choice = max(choice- files_removed, 0)
-                file_list = file_list[ keep_file_from: ]
-                file_settings_list = file_settings_list[ keep_file_from: ]
-            else:
-                file_list = []
-                choice = 0
-            return file_list, file_settings_list, choice
-        
-        file_list = gen.get("file_list", [])
-        file_settings_list = gen.get("file_settings_list", [])
-        choice = gen.get("selected",0)
-        gen["file_list"], gen["file_settings_list"], gen["selected"] = truncate_list(file_list, file_settings_list, choice)         
-
-        audio_file_list = gen.get("audio_file_list", [])
-        audio_file_settings_list = gen.get("audio_file_settings_list", [])
-        audio_choice = gen.get("audio_selected",0)
-        gen["audio_file_list"], gen["audio_file_settings_list"], gen["audio_selected"] = truncate_list(audio_file_list, audio_file_settings_list, audio_choice)         
-
-    while True:
-        with gen_lock:
-            process_status = gen.get("process_status", None)
-            if process_status is None or process_status == "process:main":
-                gen["process_status"] = "process:main"
-                break
-        time.sleep(0.1)
-
-    def release_gen():
-        with gen_lock:
-            process_status = gen.get("process_status", None)
-            if process_status.startswith("request:"):        
-                gen["process_status"] = "process:" + process_status[len("request:"):]
-            else:
-                gen["process_status"] = None
-
-    start_time = time.time()
-
-    global gen_in_progress
-    gen_in_progress = True
-    gen["in_progress"] = True
-    gen["preview"] = None
-    gen["status"] = "Generating Video"
-    gen["header_text"] = ""    
-
-    yield time.time(), time.time() 
-    prompt_no = 0
-    while len(queue) > 0:
-        prompt_no += 1
-        gen["prompt_no"] = prompt_no
-
-        task = None
-        with lock:
-            if len(queue) > 0:
-                task = queue[0]
-
-        if task is None:
-            break
-
-        task_id = task["id"] 
-        params = task['params']
-
-        com_stream = AsyncStream()
-        send_cmd = com_stream.output_queue.push
-        def generate_video_error_handler():
-            try:
-                assembled_params = assemble_generation_params(params, state=state)
-                task['params'] = assembled_params
-                plugin_data = task.pop('plugin_data', {})
-                generate_video(task, send_cmd, plugin_data=plugin_data,  **assembled_params)
-            except Exception as e:
-                tb = traceback.format_exc().split('\n')[:-1] 
-                print('\n'.join(tb))
-                send_cmd("error",str(e))
-            finally:
-                send_cmd("exit", None)
-
-        async_run(generate_video_error_handler)
-
-        while True:
-            cmd, data = com_stream.output_queue.next()               
-            if cmd == "exit":
-                break
-            elif cmd == "info":
-                notify_info(data)
-            elif cmd == "error": 
-                queue.clear()
-                gen["prompts_max"] = 0
-                gen["prompt"] = ""
-                gen["status_display"] =  False
-                release_gen()
-                notify_error(str(data))
-                raise GenerationError(str(data))
-            elif cmd == "status":
-                gen["status"] = data
-            elif cmd == "output":
-                gen["preview"] = None
-                yield time.time() , time.time() 
-            elif cmd == "progress":
-                gen["progress_args"] = data
-            elif cmd == "preview":
-                torch.cuda.current_stream().synchronize()
-                preview= None if data== None else generate_preview(task['params']["model_type"], data) 
-                gen["preview"] = preview
-                yield time.time() , time.time()
-            else:
-                release_gen()
-                raise Exception(f"unknown command {cmd}")
-
-        abort = gen.get("abort", False)
-        if abort:
-            gen["abort"] = False
-            status = "Video Generation Aborted", "Video Generation Aborted"
-            yield time.time() , time.time() 
-            gen["status"] = status
-
-        with lock:
-            queue[:] = [item for item in queue if item['id'] != task_id]
-        update_global_queue_ref(queue)
-
-    gen["prompts_max"] = 0
-    gen["prompt"] = ""
-    end_time = time.time()
-    if abort:
-        status = f"Video generation was aborted. Total Generation Time: {format_time(end_time-start_time)}" 
-    else:
-        status = f"Total Generation Time: {format_time(end_time-start_time)}"
-        try:
-            if server_config.get("notification_sound_enabled", 1):
-                volume = server_config.get("notification_sound_volume", 50)
-                notification_sound.notify_video_completion(volume=volume)
-        except Exception as e:
-            print(f"Error playing notification sound: {e}")
-    gen["status"] = status
-    gen["status_display"] =  False
-    release_gen()
-
-
-
-def get_generation_status(prompt_no, prompts_max, repeat_no, repeat_max, window_no, total_windows):
-    if prompts_max == 1:        
-        if repeat_max <= 1:
-            status = ""
-        else:
-            status = f"Sample {repeat_no}/{repeat_max}"
-    else:
-        if repeat_max <= 1:
-            status = f"Prompt {prompt_no}/{prompts_max}"
-        else:
-            status = f"Prompt {prompt_no}/{prompts_max}, Sample {repeat_no}/{repeat_max}"
-    if total_windows > 1:
-        if len(status) > 0:
-            status += ", "
-        status += f"Sliding Window {window_no}/{total_windows}"
-
-    return status
-
-refresh_id = 0
-
-def get_new_refresh_id():
-    global refresh_id
-    refresh_id += 1
-    return refresh_id
-
-def merge_status_context(status="", context=""):
-    if len(status) == 0:
-        return context
-    elif len(context) == 0:
-        return status
-    else:
-        # Check if context already contains the time
-        if "|" in context:
-            parts = context.split("|")
-            return f"{status} - {parts[0].strip()} | {parts[1].strip()}"
-        else:
-            return f"{status} - {context}"
-        
-def clear_status(state):
-    gen = get_gen_info(state)
-    gen["extra_windows"] = 0
-    gen["total_windows"] = 1
-    gen["window_no"] = 1
-    gen["extra_orders"] = 0
-    gen["repeat_no"] = 0
-    gen["total_generation"] = 0
-
-def get_latest_status(state, context=""):
-    gen = get_gen_info(state)
-    prompt_no = gen["prompt_no"] 
-    prompts_max = gen.get("prompts_max",0)
-    total_generation = gen.get("total_generation", 1)
-    repeat_no = gen.get("repeat_no",0)
-    total_generation += gen.get("extra_orders", 0)
-    total_windows = gen.get("total_windows", 0)
-    total_windows += gen.get("extra_windows", 0)
-    window_no = gen.get("window_no", 0)
-    status = get_generation_status(prompt_no, prompts_max, repeat_no, total_generation, window_no, total_windows)
-    return merge_status_context(status, context)
-
-def update_status(state): 
-    gen = get_gen_info(state)
-    gen["progress_status"] = get_latest_status(state)
-    gen["refresh"] = get_new_refresh_id()
-
-
-def one_more_sample(state):
-    gen = get_gen_info(state)
-    extra_orders = gen.get("extra_orders", 0)
-    extra_orders += 1
-    gen["extra_orders"]  = extra_orders
-    in_progress = gen.get("in_progress", False)
-    if not in_progress :
-        return state
-    total_generation = gen.get("total_generation", 0) + extra_orders
-    gen["progress_status"] = get_latest_status(state)
-    gen["refresh"] = get_new_refresh_id()
-    notify_info(f"An extra sample generation is planned for a total of {total_generation} samples for this prompt")
-
-    return state 
-
-def one_more_window(state):
-    gen = get_gen_info(state)
-    extra_windows = gen.get("extra_windows", 0)
-    extra_windows += 1
-    gen["extra_windows"]= extra_windows
-    in_progress = gen.get("in_progress", False)
-    if not in_progress :
-        return state
-    total_windows = gen.get("total_windows", 0) + extra_windows
-    gen["progress_status"] = get_latest_status(state)
-    gen["refresh"] = get_new_refresh_id()
-    notify_info(f"An extra window generation is planned for a total of {total_windows} videos for this sample")
-
-    return state 
-
-from shared.utils.loras_mutipliers import merge_loras_settings
+def _get_task_inputs_manager() -> TaskInputManager:
+    global _task_inputs_manager
+    manager = _task_inputs_manager
+    if manager is None or manager.server_config is not server_config:
+        manager = TaskInputManager(
+            server_config=server_config,
+            settings_version=settings_version,
+            get_model_record=get_model_record,
+            get_model_name=get_model_name,
+            get_model_def=get_model_def,
+            get_base_model_type=get_base_model_type,
+            get_model_family=get_model_family,
+            test_vace_module=test_vace_module,
+            test_class_t2v=test_class_t2v,
+            test_any_sliding_window=test_any_sliding_window,
+            any_audio_track=any_audio_track,
+            get_lora_dir=get_lora_dir,
+            settings_loader=None,
+            get_settings_file_name=get_settings_file_name,
+            set_model_settings=set_model_settings,
+            notify_info=notify_info,
+            lock=lock,
+            get_model_type=get_model_type,
+            are_model_types_compatible=are_model_types_compatible,
+            get_default_settings=get_default_settings,
+            get_model_settings=get_model_settings,
+            fix_settings=fix_settings,
+            model_types=tuple(model_types),
+        )
+        _task_inputs_manager = manager
+    return manager
 
 def prepare_inputs_dict(target, inputs, model_type = None, model_filename = None ):
-    state = inputs.pop("state")
-    loras = state["loras"]
-    plugin_data = inputs.pop("plugin_data", {})
-    if "loras_choices" in inputs:
-        loras_choices = inputs.pop("loras_choices")
-        inputs.pop("model_filename", None)
-    else:
-        loras_choices = inputs["activated_loras"]
-    if model_type == None: model_type = state["model_type"]
-    
-    inputs["activated_loras"] = update_loras_url_cache(get_lora_dir(model_type), loras_choices)
-    
-    if target == "state":
-        return inputs
-    
-    if "lset_name" in inputs:
-        inputs.pop("lset_name")
-        
-    unsaved_params = ["image_start", "image_end", "image_refs", "video_guide", "image_guide", "video_source", "video_mask", "image_mask", "audio_guide", "audio_guide2", "audio_source"]
-    for k in unsaved_params:
-        inputs.pop(k)
-    inputs["type"] = get_model_record(get_model_name(model_type))  
-    inputs["settings_version"] = settings_version
-    model_def = get_model_def(model_type)
-    base_model_type = get_base_model_type(model_type)
-    model_family = get_model_family(base_model_type)
-    if model_type != base_model_type:
-        inputs["base_model_type"] = base_model_type
-    diffusion_forcing = base_model_type in ["sky_df_1.3B", "sky_df_14B"]
-    vace =  test_vace_module(base_model_type) 
-    t2v=   test_class_t2v(base_model_type) 
-    ltxv = base_model_type in ["ltxv_13B"]
-    if target == "settings":
-        return inputs
+    manager = _get_task_inputs_manager()
+    return manager.prepare_inputs_dict(target, inputs, model_type=model_type, model_filename=model_filename)
 
-    image_outputs = inputs.get("image_mode",0) > 0
-
-    pop=[]    
-    if not model_def.get("audio_only", False):
-        pop += [ "pace", "exaggeration", "temperature"]
-
-    if "force_fps" in inputs and len(inputs["force_fps"])== 0:
-        pop += ["force_fps"]
-
-    if model_def.get("sample_solvers", None) is None:
-        pop += ["sample_solver"]
-    
-    if any_audio_track(base_model_type) or server_config.get("mmaudio_enabled", 0) == 0:
-        pop += ["MMAudio_setting", "MMAudio_prompt", "MMAudio_neg_prompt"]
-
-    video_prompt_type = inputs["video_prompt_type"]
-    if not "G" in video_prompt_type:
-        pop += ["denoising_strength"]
-
-    if not (server_config.get("enhancer_enabled", 0) > 0 and server_config.get("enhancer_mode", 0) == 0):
-        pop += ["prompt_enhancer"]
-
-    if model_def.get("model_modes", None) is None:
-        pop += ["model_mode"]
-
-    if model_def.get("guide_custom_choices", None ) is None and model_def.get("guide_preprocessing", None ) is None:
-        pop += ["keep_frames_video_guide", "mask_expand"]
-
-    if not "I" in video_prompt_type:
-        pop += ["remove_background_images_ref"]
-        if not model_def.get("any_image_refs_relative_size", False):
-            pop += ["image_refs_relative_size"]
-
-    if not vace:
-        pop += ["frames_positions", "control_net_weight", "control_net_weight2"] 
-
-    if not len(model_def.get("control_net_weight_alt_name", "")) >0:
-        pop += ["control_net_weight_alt"]
-                        
-    if model_def.get("video_guide_outpainting", None) is None:
-        pop += ["video_guide_outpainting"] 
-
-    if not (vace or t2v):
-        pop += ["min_frames_if_references"]
-
-    if not (diffusion_forcing or ltxv or vace):
-        pop += ["keep_frames_video_source"]
-
-    if not test_any_sliding_window( base_model_type):
-        pop += ["sliding_window_size", "sliding_window_overlap", "sliding_window_overlap_noise", "sliding_window_discard_last_frames", "sliding_window_color_correction_strength"]
-
-    if not model_def.get("audio_guidance", False):
-        pop += ["audio_guidance_scale", "speakers_locations"]
-
-    if not model_def.get("embedded_guidance", False):
-        pop += ["embedded_guidance_scale"]
-
-    if not (model_def.get("tea_cache", False) or model_def.get("mag_cache", False)) :
-        pop += ["skip_steps_cache_type", "skip_steps_multiplier", "skip_steps_start_step_perc"]
-
-    guidance_max_phases = model_def.get("guidance_max_phases", 0)
-    guidance_phases = inputs.get("guidance_phases", 1)
-    if guidance_max_phases < 1:
-        pop += ["guidance_scale", "guidance_phases"]
-
-    if guidance_max_phases < 2 or guidance_phases < 2:
-        pop += ["guidance2_scale", "switch_threshold"]
-
-    if guidance_max_phases < 3 or guidance_phases < 3:
-        pop += ["guidance3_scale", "switch_threshold2", "model_switch_phase"]
-
-    if ltxv or image_outputs:
-        pop += ["flow_shift"]
-
-    if model_def.get("no_negative_prompt", False) :
-        pop += ["negative_prompt" ] 
-
-    if not model_def.get("skip_layer_guidance", False):
-        pop += ["slg_switch", "slg_layers", "slg_start_perc", "slg_end_perc"]
-
-    if not model_def.get("cfg_zero", False):
-        pop += [ "cfg_zero_step"  ] 
-
-    if not model_def.get("cfg_star", False):
-        pop += ["cfg_star_switch" ] 
-
-    if not model_def.get("adaptive_projected_guidance", False):
-        pop += ["apg_switch"] 
-
-    if not model_family == "wan" or diffusion_forcing:
-        pop +=["NAG_scale", "NAG_tau", "NAG_alpha" ]
-
-    for k in pop:
-        if k in inputs: inputs.pop(k)
-
-    if target == "metadata":
-        inputs = {k: v for k, v in inputs.items() if v is not None}
-
-    return inputs
 
 def get_function_arguments(func, locals):
     args_names = list(inspect.signature(func).parameters)
@@ -4457,120 +3836,6 @@ def extract_and_apply_source_images(file_path, current_settings):
     return applied_count
 
 
-loras_url_cache = None
-def update_loras_url_cache(lora_dir, loras_selected):
-    if loras_selected is None: return None
-    global loras_url_cache
-    loras_cache_file = "loras_url_cache.json"
-    if loras_url_cache is None:
-        if os.path.isfile(loras_cache_file):
-            try:
-                with open(loras_cache_file, 'r', encoding='utf-8') as f:
-                    loras_url_cache = json.load(f)
-            except:
-                loras_url_cache = {}
-        else:
-            loras_url_cache = {}
-    new_loras_selected = []
-    update = False
-    for lora in loras_selected:
-        base_name = os.path.basename(lora)
-        local_name = os.path.join(lora_dir, base_name)
-        url = loras_url_cache.get(local_name, base_name)
-        if (lora.startswith("http:") or lora.startswith("https:")) and url != lora:
-            loras_url_cache[local_name]=lora
-            update = True
-        new_loras_selected.append(url)
-
-    if update:
-        with open(loras_cache_file, "w", encoding="utf-8") as writer:
-            writer.write(json.dumps(loras_url_cache, indent=4))
-
-    return new_loras_selected
-
-def get_settings_from_file(state, file_path, allow_json, merge_with_defaults, switch_type_if_compatible, min_settings_version = 0, merge_loras = None):    
-    configs = None
-    any_image_or_video = False
-    any_audio = False
-    if file_path.endswith(".json") and allow_json:
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                configs = json.load(f)
-        except:
-            pass
-    elif file_path.endswith(".mp4") or file_path.endswith(".mkv"):
-        from shared.utils.video_metadata import read_metadata_from_video
-        try:
-            configs = read_metadata_from_video(file_path)
-            if configs:
-                any_image_or_video = True
-        except:
-            pass
-    elif has_image_file_extension(file_path):
-        try:
-            configs = read_image_metadata(file_path)
-            any_image_or_video = True
-        except:
-            pass
-    elif has_audio_file_extension(file_path):
-        try:
-            configs = read_audio_metadata(file_path)
-            any_audio = True
-        except:
-            pass
-    if configs is None: return None, False, False
-    try:
-        if isinstance(configs, dict):
-            if (not merge_with_defaults) and not "WanGP" in configs.get("type", ""): configs = None 
-        else:
-            configs = None
-    except:
-        configs = None
-    if configs is None: return None, False, False
-        
-
-    current_model_type = state["model_type"]
-    
-    model_type = configs.get("model_type", None)
-    if get_base_model_type(model_type) == None:
-        model_type = configs.get("base_model_type", None)
-  
-    if model_type == None:
-        model_filename = configs.get("model_filename", "")
-        model_type = get_model_type(model_filename)
-        if model_type == None:
-            model_type = current_model_type
-    elif not model_type in model_types:
-        model_type = current_model_type
-    if switch_type_if_compatible and are_model_types_compatible(model_type,current_model_type):
-        model_type = current_model_type
-    old_loras_selected = old_loras_multipliers = None
-    if merge_with_defaults:
-        defaults = get_model_settings(state, model_type) 
-        defaults = get_default_settings(model_type) if defaults == None else defaults
-        if merge_loras is not None and model_type == current_model_type:
-            old_loras_selected, old_loras_multipliers  = defaults.get("activated_loras", []), defaults.get("loras_multipliers", ""),
-        defaults.update(configs)
-        configs = defaults
-
-    loras_selected =configs.get("activated_loras", [])
-    loras_multipliers = configs.get("loras_multipliers", "")
-    if loras_selected is not None and len(loras_selected) > 0:
-        loras_selected = update_loras_url_cache(get_lora_dir(model_type), loras_selected)
-    if old_loras_selected is not None:
-        if len(old_loras_selected) == 0 and "|" in loras_multipliers:
-            pass
-        else:
-            old_loras_selected = update_loras_url_cache(get_lora_dir(model_type), old_loras_selected)
-            loras_selected, loras_multipliers = merge_loras_settings(old_loras_selected, old_loras_multipliers, loras_selected, loras_multipliers, merge_loras )
-
-    configs["activated_loras"]= loras_selected or []
-    configs["loras_multipliers"] = loras_multipliers       
-    fix_settings(model_type, configs, min_settings_version)
-    configs["model_type"] = model_type
-
-    return configs, any_image_or_video, any_audio
-
 def reset_settings(state):
     model_type = state["model_type"]
     ui_defaults = get_default_settings(model_type)
@@ -4607,7 +3872,7 @@ def save_inputs(
             multi_images_gen_type,
             skip_steps_cache_type,
             skip_steps_multiplier,
-            skip_steps_start_step_perc,    
+            skip_steps_start_step_perc,
             loras_choices,
             loras_multipliers,
             image_prompt_type,
@@ -4632,7 +3897,7 @@ def save_inputs(
             mask_expand,
             audio_guide,
             audio_guide2,
-            audio_source,            
+            audio_source,
             audio_prompt_type,
             speakers_locations,
             sliding_window_size,
@@ -4648,12 +3913,12 @@ def save_inputs(
             film_grain_saturation,
             MMAudio_setting,
             MMAudio_prompt,
-            MMAudio_neg_prompt,            
+            MMAudio_neg_prompt,
             RIFLEx_setting,
             NAG_scale,
             NAG_tau,
             NAG_alpha,
-            slg_switch, 
+            slg_switch,
             slg_layers,
             slg_start_perc,
             slg_end_perc,
@@ -4670,29 +3935,104 @@ def save_inputs(
             state,
             plugin_data,
 ):
+    payload = SaveInputsPayload(
+        image_mask_guide=image_mask_guide,
+        lset_name=lset_name,
+        image_mode=image_mode,
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        resolution=resolution,
+        video_length=video_length,
+        batch_size=batch_size,
+        seed=seed,
+        force_fps=force_fps,
+        num_inference_steps=num_inference_steps,
+        guidance_scale=guidance_scale,
+        guidance2_scale=guidance2_scale,
+        guidance3_scale=guidance3_scale,
+        switch_threshold=switch_threshold,
+        switch_threshold2=switch_threshold2,
+        guidance_phases=guidance_phases,
+        model_switch_phase=model_switch_phase,
+        audio_guidance_scale=audio_guidance_scale,
+        flow_shift=flow_shift,
+        sample_solver=sample_solver,
+        embedded_guidance_scale=embedded_guidance_scale,
+        repeat_generation=repeat_generation,
+        multi_prompts_gen_type=multi_prompts_gen_type,
+        multi_images_gen_type=multi_images_gen_type,
+        skip_steps_cache_type=skip_steps_cache_type,
+        skip_steps_multiplier=skip_steps_multiplier,
+        skip_steps_start_step_perc=skip_steps_start_step_perc,
+        loras_choices=loras_choices,
+        loras_multipliers=loras_multipliers,
+        image_prompt_type=image_prompt_type,
+        image_start=image_start,
+        image_end=image_end,
+        model_mode=model_mode,
+        video_source=video_source,
+        keep_frames_video_source=keep_frames_video_source,
+        video_guide_outpainting=video_guide_outpainting,
+        video_prompt_type=video_prompt_type,
+        image_refs=image_refs,
+        frames_positions=frames_positions,
+        video_guide=video_guide,
+        image_guide=image_guide,
+        keep_frames_video_guide=keep_frames_video_guide,
+        denoising_strength=denoising_strength,
+        video_mask=video_mask,
+        image_mask=image_mask,
+        control_net_weight=control_net_weight,
+        control_net_weight2=control_net_weight2,
+        control_net_weight_alt=control_net_weight_alt,
+        mask_expand=mask_expand,
+        audio_guide=audio_guide,
+        audio_guide2=audio_guide2,
+        audio_source=audio_source,
+        audio_prompt_type=audio_prompt_type,
+        speakers_locations=speakers_locations,
+        sliding_window_size=sliding_window_size,
+        sliding_window_overlap=sliding_window_overlap,
+        sliding_window_color_correction_strength=sliding_window_color_correction_strength,
+        sliding_window_overlap_noise=sliding_window_overlap_noise,
+        sliding_window_discard_last_frames=sliding_window_discard_last_frames,
+        image_refs_relative_size=image_refs_relative_size,
+        remove_background_images_ref=remove_background_images_ref,
+        temporal_upsampling=temporal_upsampling,
+        spatial_upsampling=spatial_upsampling,
+        film_grain_intensity=film_grain_intensity,
+        film_grain_saturation=film_grain_saturation,
+        MMAudio_setting=MMAudio_setting,
+        MMAudio_prompt=MMAudio_prompt,
+        MMAudio_neg_prompt=MMAudio_neg_prompt,
+        RIFLEx_setting=RIFLEx_setting,
+        NAG_scale=NAG_scale,
+        NAG_tau=NAG_tau,
+        NAG_alpha=NAG_alpha,
+        slg_switch=slg_switch,
+        slg_layers=slg_layers,
+        slg_start_perc=slg_start_perc,
+        slg_end_perc=slg_end_perc,
+        apg_switch=apg_switch,
+        cfg_star_switch=cfg_star_switch,
+        cfg_zero_step=cfg_zero_step,
+        prompt_enhancer=prompt_enhancer,
+        min_frames_if_references=min_frames_if_references,
+        override_profile=override_profile,
+        pace=pace,
+        exaggeration=exaggeration,
+        temperature=temperature,
+        mode=mode,
+    )
+    request = SaveInputsRequest(
+        target=target,
+        payload=payload,
+        state=state,
+        plugin_data=plugin_data or {},
+    )
+    manager = _get_task_inputs_manager()
+    manager.save_inputs(request)
 
-
-    model_type = state["model_type"]
-    if image_mask_guide is not None and image_mode >= 1 and video_prompt_type is not None and "A" in video_prompt_type and not "U" in video_prompt_type:
-    # if image_mask_guide is not None and image_mode == 2:
-        if "background" in image_mask_guide: 
-            image_guide = image_mask_guide["background"]
-        if "layers" in image_mask_guide and len(image_mask_guide["layers"])>0: 
-            image_mask = image_mask_guide["layers"][0] 
-        image_mask_guide = None
-    inputs = get_function_arguments(save_inputs, locals())
-    inputs.pop("target")
-    inputs.pop("image_mask_guide")
-    cleaned_inputs = prepare_inputs_dict(target, inputs)
-    if target == "settings":
-        defaults_filename = get_settings_file_name(model_type)
-
-        with open(defaults_filename, "w", encoding="utf-8") as f:
-            json.dump(cleaned_inputs, f, indent=4)
-
-        notify_info("New Default Settings saved")
-    elif target == "state":
-        set_model_settings(state, model_type, cleaned_inputs)        
 
 
 def any_letters(source_str, letters):
