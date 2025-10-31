@@ -5,6 +5,7 @@ import os
 import secrets
 import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 import imageio
@@ -13,6 +14,7 @@ from PIL import Image
 from torchvision.utils import make_grid, save_image as torchvision_save_image
 
 LoggerCallable = Union[Callable[[str], None], logging.Logger]
+MetadataHandler = Callable[[str, Dict[str, Any], Dict[str, Any]], bool]
 
 
 def _emit(logger: Optional[LoggerCallable], message: str, level: str = "debug") -> None:
@@ -73,7 +75,8 @@ class MetadataSaveConfig:
     """Configuration payload for metadata persistence."""
 
     format_hint: Optional[str] = None
-    extra_options: Dict[str, Any] = field(default_factory=dict)
+    handlers: Dict[str, MetadataHandler] = field(default_factory=dict)
+    extra_options: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 def _ensure_container_suffix(path: str, container: Optional[str]) -> str:
@@ -278,13 +281,81 @@ def write_metadata_bundle(
     """
     Persist metadata alongside a media artifact.
 
-    The final implementation will route to image/audio/video specific handlers.
-    Until then this placeholder always raises ``NotImplementedError`` so legacy
-    callers continue to rely on the existing helpers.
+    Dispatches to the appropriate metadata handler based on ``format_hint`` or
+    the file extension. Callers may override the handler mapping and per-format
+    options through ``MetadataSaveConfig``.
     """
 
-    _emit(logger, "write_metadata_bundle invoked (scaffolding); falling back to legacy implementation.")
-    raise NotImplementedError("write_metadata_bundle is not implemented yet.")
+    metadata_type = _infer_metadata_type(target_path, config.format_hint)
+    if metadata_type is None:
+        _emit(logger, f"write_metadata_bundle could not infer metadata type for {target_path}", level="warning")
+        return False
+
+    handlers = _build_handlers(config.handlers)
+    handler = handlers.get(metadata_type)
+    if handler is None:
+        _emit(logger, f"write_metadata_bundle has no handler for type '{metadata_type}' ({target_path})", level="warning")
+        return False
+
+    options = config.extra_options.get(metadata_type, {})
+    try:
+        result = handler(target_path, payload, options)
+    except Exception as exc:  # pragma: no cover - depends on optional deps
+        _emit(logger, f"write_metadata_bundle failed for {target_path}: {exc}", level="error")
+        return False
+
+    if not result:
+        _emit(logger, f"write_metadata_bundle handler reported failure for {target_path}", level="warning")
+        return False
+
+    return True
+
+
+def _infer_metadata_type(path: str, hint: Optional[str]) -> Optional[str]:
+    if hint:
+        return hint.strip().lower()
+
+    suffix = Path(path).suffix.lower()
+    if suffix in {".png", ".jpg", ".jpeg", ".webp"}:
+        return "image"
+    if suffix in {".wav"}:
+        return "audio"
+    if suffix in {".mp4", ".mkv"}:
+        return "video"
+    return None
+
+
+def _build_handlers(overrides: Dict[str, MetadataHandler]) -> Dict[str, MetadataHandler]:
+    handlers = {key.strip().lower(): value for key, value in overrides.items() if callable(value)}
+    for key, handler in _default_metadata_handlers().items():
+        handlers.setdefault(key, handler)
+    return handlers
+
+
+def _default_metadata_handlers() -> Dict[str, MetadataHandler]:
+    def image_handler(target_path: str, payload: Dict[str, Any], options: Dict[str, Any]) -> bool:
+        from shared.utils.audio_video import _legacy_save_image_metadata
+
+        save_kwargs = options.get("save_kwargs", {})
+        return bool(_legacy_save_image_metadata(target_path, payload, **save_kwargs))
+
+    def audio_handler(target_path: str, payload: Dict[str, Any], options: Dict[str, Any]) -> bool:
+        from shared.utils.audio_metadata import save_audio_metadata
+
+        save_audio_metadata(target_path, payload)
+        return True
+
+    def video_handler(target_path: str, payload: Dict[str, Any], options: Dict[str, Any]) -> bool:
+        from shared.utils.video_metadata import save_video_metadata
+
+        source_images = options.get("source_images")
+        return bool(save_video_metadata(target_path, payload, source_images))
+
+    return {
+        "image": image_handler,
+        "audio": audio_handler,
+        "video": video_handler,
+    }
 
 
 __all__ = [

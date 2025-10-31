@@ -20,6 +20,7 @@ import numpy as np
 import torch
 from PIL import Image
 
+from core.io.media import MetadataSaveConfig, write_metadata_bundle
 from shared.utils import files_locator as fl
 from shared.utils.audio_video import (
     cleanup_temp_audio_files,
@@ -449,6 +450,25 @@ def _save_outputs(
         "end_frame": request.end_frame,
         "new_dim": request.new_dim,
     }
+
+    metadata_config = MetadataSaveConfig(format_hint="video")
+    foreground_metadata = dict(metadata)
+    foreground_metadata["artifact_role"] = "foreground"
+    write_metadata_bundle(
+        str(final_foreground_path),
+        foreground_metadata,
+        config=metadata_config,
+        logger=media_logger,
+    )
+
+    alpha_metadata = dict(metadata)
+    alpha_metadata["artifact_role"] = "alpha"
+    write_metadata_bundle(
+        str(final_alpha_path),
+        alpha_metadata,
+        config=metadata_config,
+        logger=media_logger,
+    )
 
     return MatAnyOneResult(
         foreground_path=final_foreground_path,

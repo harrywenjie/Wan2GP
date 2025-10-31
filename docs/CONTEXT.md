@@ -48,15 +48,15 @@
 - Proposed a CLI-facing control surface for the enhancer: add a `--prompt-enhancer` flag mapping to the legacy `"", "T", "I", "TI"` modes (off / text / image / text+image) and introduce a provider selector so the Florence2+LLaMA stack and future cloud LLMs can share the same entry point.
 - Confirmed there are no remaining `ui.update` call sites; `shared.ui_compat` is now effectively idle and can be removed once the last compatibility hooks are collapsed.
 - Audited CLI overrides: prompt enhancer/provider, `--output-dir`, and `--profile` mutate in-memory runtime state only; documented the per-run behaviour in CLI help/docs so operators know to edit `wgp_config.json` when they want new defaults.
-- Relocated `get_available_filename` into `core/io.py`; `wgp.py` now imports the helper directly so future `ProductionManager` refactors can reuse the path allocator without relying on the legacy module.
-- IO helper call sites (2025-02-18):
-  - `wgp.generate_video` uses `shared.utils.audio_video.save_video` for the primary render (`video_path`), MMAudio/post-processing rewrites, and debug mask dumps; it saves still previews via `save_image`, and writes media metadata with `save_audio_metadata`, `save_image_metadata`, and `save_video_metadata`.
-  - `preprocessing/matanyone.app.generate_masks` writes foreground/alpha outputs through `save_video` (including temporary intermediates).
-  - No other modules currently invoke the metadata writers; additional `save_video` references in `models/wan/any2video.py` are debug-only comments.
+- Converted `core/io` into a package so `core.io.media` can live alongside the filename allocator; `core.io.__init__` now re-exports `get_available_filename` plus the media helpers to keep import surfaces stable.
+- IO helper call sites (2025-02-24):
+  - `wgp.generate_video` still uses `shared.utils.audio_video.save_video` for primary renders and debug dumps plus `save_image` for previews, but metadata now flows through `core.io.write_metadata_bundle` with per-type configs.
+  - `preprocessing.matanyone.app._save_outputs` persists foreground/alpha MP4s via `save_video` and embeds run metadata for each artifact through `write_metadata_bundle`.
+  - No other modules currently invoke the metadata bundler; the legacy `save_*_metadata` wrappers remain as temporary shims until we delete them.
 - Save helper dependency map:
   - `core.io.media.write_video` accepts torch tensors or numpy frames, performs the legacy normalization/grid logic, merges codec parameters, and logs retry failures through the injected logger.
   - `core.io.media.write_image` preserves the PNG/WebP/JPEG handling (including RGBA promotion to PNG) and surfaces retry exhaustion through the logger while still returning the resolved path for compatibility.
-  - Metadata writers (`save_image_metadata`, `save_audio_metadata`, `save_video_metadata`) rely on `PIL`, `piexif`, `json`, and format-specific branches; they emit `print`-based warnings.
+  - Metadata bundler `write_metadata_bundle` infers the artifact type from the path/format hint, dispatches to the existing `save_*_metadata` helpers, and emits logger-aware diagnostics when persistence fails.
   - The MatAnyOne CLI forwards `request.codec` directly to `save_video`, so the new abstraction must preserve per-request codec overrides while still supporting `server_config` defaults used by `wgp`.
   - ProductionManager can now rely on the notifications logger default, but future metadata work still needs injectable logger hooks to replace the remaining `print` usage.
 - `core/io/media` now implements `write_video` and `write_image` with the legacy preprocessing/retry behaviour plus logger hooks; `shared.utils.audio_video` is a thin adapter that builds the configs and defaults to the notifications logger. `wgp` wraps the helpers to inject the logger for every call, and MatAnyOne forwards the CLI logger so persistence errors surface through structured logs.

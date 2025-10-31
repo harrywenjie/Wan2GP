@@ -80,9 +80,9 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ---
 
 ## Immediate Next Actions
-- Implement `write_metadata_bundle` in `core/io/media`, delegating to the existing `save_*_metadata` helpers through a `MetadataSaveConfig` mapping.
-- Update `shared.utils.audio_video` metadata helpers to call the new core writers and emit logger-aware warnings instead of bare `print`.
-- Swap `wgp` and MatAnyOne to the new metadata interface so the legacy helpers can be retired after validation.
+- Inject `MetadataSaveConfig` defaults via `ProductionManager` so CLI flows control metadata persistence without touching `wgp`.
+- Retire the legacy `save_*_metadata` shims once the new configs are in place, pruning redundant imports and helpers.
+- Document the new metadata embedding behaviour (WAN generation + MatAnyOne) in `docs/CLI.md` and `docs/APPENDIX_HEADLESS.md`, noting how to opt into JSON sidecars.
 
 ---
 

@@ -50,16 +50,16 @@ from shared.utils.audio_video import (
     save_image as _save_image,
 )
 from shared.notifications import create_legacy_notifier
-from shared.utils.audio_video import save_image_metadata, read_image_metadata
+from shared.utils.audio_video import read_image_metadata
 from core.preview import prepare_preview_inputs
 from core.task_inputs import SaveInputsPayload, SaveInputsRequest, TaskInputManager
-from shared.utils.audio_metadata import save_audio_metadata, read_audio_metadata
-from shared.utils.video_metadata import save_video_metadata
+from shared.utils.audio_metadata import read_audio_metadata
 from shared.match_archi import match_nvidia_architecture
 from shared.attention import get_attention_modes, get_supported_attention_modes
 from shared.utils.utils import truncate_for_filesystem, sanitize_file_name, process_images_multithread, get_default_workers
 from shared.utils.process_locks import acquire_GPU_ressources, get_gen_info, release_GPU_ressources, gen_lock
 from core.io import get_available_filename
+from core.io.media import MetadataSaveConfig, write_metadata_bundle
 from huggingface_hub import hf_hub_download, snapshot_download
 from shared.utils import files_locator as fl 
 import torch
@@ -2510,11 +2510,21 @@ def edit_video(
                 file_list.append(new_video_path)
                 file_settings_list.append(configs)
 
-            if configs != None:
-                from shared.utils.video_metadata import extract_source_images, save_video_metadata
+            if configs is not None:
+                from shared.utils.video_metadata import extract_source_images
+
                 temp_images_path = get_available_filename(save_path, video_source, force_extension= ".temp")
                 embedded_images = extract_source_images(video_source, temp_images_path)
-                save_video_metadata(new_video_path, configs, embedded_images)
+                metadata_config = MetadataSaveConfig(
+                    format_hint="video",
+                    extra_options={"video": {"source_images": embedded_images}},
+                )
+                write_metadata_bundle(
+                    new_video_path,
+                    configs,
+                    config=metadata_config,
+                    logger=get_notifications_logger(),
+                )
                 if os.path.isdir(temp_images_path):
                     shutil.rmtree(temp_images_path, ignore_errors= True)
             send_cmd("output")
@@ -3664,17 +3674,25 @@ def generate_video(
                 # if is_image: configs["is_image"] = True
                 metadata_choice = server_config.get("metadata_type","metadata")
                 video_path = [video_path] if not isinstance(video_path, list) else video_path
+                metadata_logger = get_notifications_logger() if metadata_choice == "metadata" else None
                 for no, path in enumerate(video_path):
                     if metadata_choice == "json":
                         with open(path.replace(f'.{extension}', '.json'), 'w') as f:
                             json.dump(configs, f, indent=4)
                     elif metadata_choice == "metadata":
                         if audio_only:
-                            save_audio_metadata(path, configs)
-                        if is_image:
-                            save_image_metadata(path, configs)
+                            config = MetadataSaveConfig(format_hint="audio")
+                        elif is_image:
+                            config = MetadataSaveConfig(format_hint="image")
                         else:
-                            save_video_metadata(path, configs, embedded_images)
+                            extra_options = {"video": {"source_images": embedded_images}} if embedded_images else {}
+                            config = MetadataSaveConfig(format_hint="video", extra_options=extra_options)
+                        write_metadata_bundle(
+                            path,
+                            configs,
+                            config=config,
+                            logger=metadata_logger,
+                        )
                     if audio_only:
                         print(f"New audio file saved to Path: "+ path)
                     elif is_image:

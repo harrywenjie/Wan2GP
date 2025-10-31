@@ -8,8 +8,10 @@ from PIL import Image, PngImagePlugin
 
 from core.io.media import (
     ImageSaveConfig,
+    MetadataSaveConfig,
     VideoSaveConfig,
     write_image,
+    write_metadata_bundle,
     write_video,
 )
 from shared.utils.notifications import get_notifications_logger
@@ -278,23 +280,43 @@ def _dec_uc(b):
     if b.startswith(b"UNICODE\0"):   return b[8:].decode("utf-16le", "ignore")
     return b.decode("utf-8", "ignore")
 
-def save_image_metadata(image_path, metadata_dict, **save_kwargs):
-    try:
-        j = json.dumps(metadata_dict, ensure_ascii=False)
-        ext = os.path.splitext(image_path)[1].lower()
-        with Image.open(image_path) as im:
-            if ext == ".png":
-                pi = PngImagePlugin.PngInfo(); pi.add_text("comment", j)
-                im.save(image_path, pnginfo=pi, **save_kwargs); return True
-            if ext in (".jpg", ".jpeg"):
-                im.save(image_path, comment=j.encode("utf-8"), **save_kwargs); return True
-            if ext == ".webp":
-                import piexif
-                exif = {"0th":{}, "Exif":{piexif.ExifIFD.UserComment:_enc_uc(j)}, "GPS":{}, "1st":{}, "thumbnail":None}
-                im.save(image_path, format="WEBP", exif=piexif.dump(exif), **save_kwargs); return True
-            raise ValueError("Unsupported format")
-    except Exception as e:
-        print(f"Error saving metadata: {e}"); return False
+def _legacy_save_image_metadata(image_path, metadata_dict, **save_kwargs):
+    j = json.dumps(metadata_dict, ensure_ascii=False)
+    ext = os.path.splitext(image_path)[1].lower()
+    with Image.open(image_path) as im:
+        if ext == ".png":
+            png_info = PngImagePlugin.PngInfo()
+            png_info.add_text("comment", j)
+            im.save(image_path, pnginfo=png_info, **save_kwargs)
+            return True
+        if ext in (".jpg", ".jpeg"):
+            im.save(image_path, comment=j.encode("utf-8"), **save_kwargs)
+            return True
+        if ext == ".webp":
+            import piexif
+
+            exif = {
+                "0th": {},
+                "Exif": {piexif.ExifIFD.UserComment: _enc_uc(j)},
+                "GPS": {},
+                "1st": {},
+                "thumbnail": None,
+            }
+            im.save(image_path, format="WEBP", exif=piexif.dump(exif), **save_kwargs)
+            return True
+        raise ValueError(f"Unsupported format for metadata embedding: {ext}")
+
+
+def save_image_metadata(image_path, metadata_dict, *, logger=None, **save_kwargs):
+    resolved_logger = logger if logger is not None else get_notifications_logger()
+    extra_options = {"image": {"save_kwargs": save_kwargs}} if save_kwargs else {}
+    config = MetadataSaveConfig(format_hint="image", extra_options=extra_options)
+    return write_metadata_bundle(
+        image_path,
+        metadata_dict,
+        config=config,
+        logger=resolved_logger,
+    )
 
 def read_image_metadata(image_path):
     try:
@@ -326,4 +348,5 @@ def read_image_metadata(image_path):
                 return json.loads(s) if s else None
             return None
     except Exception as e:
-        print(f"Error reading metadata: {e}"); return None
+        get_notifications_logger().warning("Error reading metadata from %s: %s", image_path, e)
+        return None

@@ -31,7 +31,7 @@ Relocate the media output helpers (`save_video`, `save_image`, and the associate
 ## Migration Steps
 1. **Introduce module and dataclasses** *(Done)* – `core/io/media.py` now owns the config dataclasses and implements `write_video`/`write_image` with the legacy preprocessing, retry, and codec handling plus logger hooks.
 2. **Implement compatibility shims** *(Done)* – `shared.utils.audio_video.save_video/save_image` are thin adapters that construct configs, default to the notifications logger, and delegate to the core helpers; `wgp` and MatAnyOne inject the logger explicitly.
-3. **Migrate metadata writers** *(Planned)* – model `MetadataSaveConfig` after the existing `save_*_metadata` helpers, expose a `write_metadata_bundle` orchestrator, and update callers to route through the new interface.
+3. **Migrate metadata writers** *(Done)* – `write_metadata_bundle` now dispatches to the legacy `save_*_metadata` helpers, `shared.utils.audio_video` delegates through logger-aware shims, and both `wgp` and MatAnyOne emit metadata via `MetadataSaveConfig`.
 4. **Retire legacy metadata helpers** *(Pending)* – once `write_metadata_bundle` is wired everywhere, remove the direct exports from `shared.utils.audio_video` and collapse any redundant imports (`shared.utils.audio_metadata`, `shared.utils.video_metadata`, etc.).
 5. **Document the new surfaces** *(Pending)* – refresh `docs/CLI.md`, `docs/APPENDIX_HEADLESS.md`, and this plan after the metadata migration to capture the final CLI workflow.
 
@@ -42,12 +42,12 @@ Relocate the media output helpers (`save_video`, `save_image`, and the associate
 - **`core.io.media.write_image`**
   - Operates on torch tensors, converts RGBA tensors to PNG automatically, and uses PIL or `torchvision` depending on the requested format.
   - Returns the resolved path even when retries exhaust, mirroring the legacy helper so callers can decide how to respond.
-- **Metadata writers**
-  - `save_video_metadata` (MP4/MKV), `save_image_metadata` (PNG/JPEG/WebP via `PIL` + `piexif`), `save_audio_metadata` (WAV via `mutagen`), all emit `print` on failure.
+- **Metadata bundling**
+  - `write_metadata_bundle` infers the artifact type from `MetadataSaveConfig`/file suffix, calls the existing writers, and reports failures through the notifications logger.
 - **Orchestration touchpoints**
-  - `wgp.generate_video` now wraps the helpers to inject the notifications logger and will need to switch metadata persistence once the new interface lands.
-  - `preprocessing.matanyone.app` passes per-request codec overrides and receives the notifications logger from the CLI; metadata output still calls the legacy functions directly.
-  - CLI queue tooling records resulting paths in `state["gen"]["file_list"]`; any helper changes must preserve those contracts.
+  - `wgp.generate_video` uses `write_metadata_bundle` for JSON embedding (audio/image/video variants) while retaining JSON sidecar support.
+  - `preprocessing.matanyone.app._save_outputs` writes foreground/alpha MP4 metadata through the bundler and tags each artifact role.
+  - CLI queue tooling records resulting paths in `state["gen"]["file_list"]`; downstream consumers can toggle metadata via `server_config["metadata_type"]`.
 
 ## Metadata Migration Notes
 - `MetadataSaveConfig` should capture the target artifact type (`"video"`, `"image"`, `"audio"`), container override, and any format-specific kwargs (e.g. encoder versions, embedded image payloads).
@@ -56,7 +56,7 @@ Relocate the media output helpers (`save_video`, `save_image`, and the associate
   - `shared.utils.audio_metadata.save_audio_metadata` for audio sidecars (when present).
   - `shared.utils.audio_video.save_image_metadata` for thumbnail captures (until relocated).
 - The helper should accept a logger (defaulting to the notifications logger) and translate the current `print` statements into `logger.warning`/`logger.error` calls.
-- `ProductionManager`/`wgp` should collect the metadata payloads they currently build (`configs`, `embedded_images`, etc.) and pass them through the new API so queue consumers can override persistence behaviour in the future.
+- Next step: have `ProductionManager` build/deliver `MetadataSaveConfig` instances from `server_config`, retire the legacy shims, and expose CLI controls for opting into JSON sidecars as an alternative.
 
 ## Validation
 - Extend smoke tests: run `python -m cli.generate --prompt "smoke test prompt" --dry-run` plus a low-res render to confirm output paths.
