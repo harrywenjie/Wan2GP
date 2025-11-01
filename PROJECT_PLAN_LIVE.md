@@ -48,14 +48,10 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ---
 
 ## Immediate Next Actions
-- Stand up adapter shims for LoRA injection and prompt enhancement (`core/lora/manager.py`, `core/prompt_enhancer/bridge.py`) while legacy callers still delegate through `wgp`.
-  - Proposal: implement `LoRAInjectionManager` with discovery/preset caching plus `PromptEnhancerBridge` wrapping the existing bootstrap logic, both backed by memoised caches keyed on `(model_type, server_config_hash)`. Initial versions may call into the current helpers but must expose clear interfaces (`hydrate`, `presets`, `prime`, `enhance`, `reset`) for the CLI to consume.
-  - Rationale: creating the adapters now lets ProductionManager vend shared instances, eliminates repeated globbing/model loads across queue workers, and unlocks incremental retirement of `wgp.setup_loras` / `wgp.setup_prompt_enhancer`.
-  - Implementation sketch: add the new modules with thin wrappers over `wgp`, include smoke-style tests covering cache reuse and reset behaviour, document the API in `docs/CONTEXT.md`, and leave TODO hooks where phase-two extraction will replace the shims with native implementations.
-- Wire `ProductionManager` and `TaskInputManager` to the new adapters so CLI orchestration stops importing `wgp` for LoRA/prompt enhancer duties.
-  - Proposal: cache adapter instances on `ProductionManager`, thread them through `GenerationRuntime`, and update queue serialization plus metadata preparation to consume adapter payloads instead of calling `wgp.setup_loras`/`setup_prompt_enhancer` directly.
-  - Rationale: centralising adapter access keeps run-state deterministic, ensures queue workers share caches, and reduces the surface area that still depends on legacy globals.
-  - Implementation sketch: add `production_manager.lora_manager()` / `prompt_enhancer()` accessors, adjust `TaskInputManager.prepare_inputs_dict` to request payloads from the adapters, and keep a temporary legacy shim for older entrypoints until CLI coverage is complete.
+- Extend `TaskInputManager` with adapter payload helpers (`build_lora_payload`, `resolve_prompt_enhancer`) and update queue serialization/metadata writers to rely on those payloads instead of inlined `wgp` lookups.
+  - Ensures queue workers serialise deterministic adapter state, unlocks cache sharing for downstream consumers, and lets us prune the remaining LoRA prompt enhancer glue inside `wgp`.
+- Thread `GenerationRuntime` through `LoRAInjectionManager`/`PromptEnhancerBridge` so runtime activation, reset, and cache reuse flow through the adapters rather than direct `wgp.setup_*` invocations.
+  - Sets up the final extraction step where we delete the legacy shim calls and document CLI flags for resetting adapter caches.
 
 ---
 

@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
+from core.lora.manager import LoRAInjectionManager
+from core.prompt_enhancer.bridge import PromptEnhancerBridge
 from core.task_inputs import TaskInputManager
 from shared.notifications import GenerationNotifier
 from core.io.media import (
@@ -161,6 +163,8 @@ class ProductionManager:
         queue_tracker: Optional[QueueStateTracker] = None,
         task_input_manager: Optional[TaskInputManager] = None,
         queue_state_module: Optional[Any] = None,
+        lora_manager: Optional[LoRAInjectionManager] = None,
+        prompt_enhancer: Optional[PromptEnhancerBridge] = None,
     ):
         self._wgp = wgp_module
         self._default_notifier = default_notifier
@@ -174,6 +178,8 @@ class ProductionManager:
         self._update_queue_tracking = queue_state_module.update_queue_tracking
         self._task_inputs_manager = task_input_manager
         self._metadata_config_templates: Optional[Dict[str, MetadataSaveConfig]] = None
+        self._lora_manager: Optional[LoRAInjectionManager] = lora_manager
+        self._prompt_enhancer_bridge: Optional[PromptEnhancerBridge] = prompt_enhancer
 
     @property
     def wgp(self) -> Any:
@@ -184,6 +190,20 @@ class ProductionManager:
         if self._queue_tracker is None:  # type: ignore[unreachable]
             self._queue_tracker = self._queue_state.get_default_tracker()
         return self._queue_tracker
+
+    def lora_manager(self) -> LoRAInjectionManager:
+        manager = self._lora_manager
+        if manager is None:
+            manager = LoRAInjectionManager(self._wgp)
+            self._lora_manager = manager
+        return manager
+
+    def prompt_enhancer(self) -> PromptEnhancerBridge:
+        bridge = self._prompt_enhancer_bridge
+        if bridge is None:
+            bridge = PromptEnhancerBridge(self._wgp)
+            self._prompt_enhancer_bridge = bridge
+        return bridge
 
     def task_inputs(self) -> TaskInputManager:
         manager = self._task_inputs_manager
@@ -216,6 +236,8 @@ class ProductionManager:
                 get_model_settings=wgp.get_model_settings,
                 fix_settings=wgp.fix_settings,
                 model_types=tuple(getattr(wgp, "model_types", ())),
+                lora_manager=self.lora_manager(),
+                prompt_enhancer=self.prompt_enhancer(),
             )
             self._task_inputs_manager = manager
         return manager

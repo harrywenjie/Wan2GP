@@ -28,21 +28,21 @@
 ## Prompt Enhancer & LoRA Adapter Design
 
 - **Adapter surfaces**
-  - `core/lora/manager.py` will expose a `LoRAInjectionManager` class with two public entrypoints: `hydrate(transformer, *, requested: Sequence[str], multipliers: Mapping[str, float])` for run-scoped activation and `presets()` for preset discovery. The manager hides filesystem discovery, preset parsing, cache refresh, and the existing `setup_loras`/`extract_preset` helpers. Internally it keeps a `LoRALibrary` cache keyed by `(model_type, lora_dir)` so repeated CLI runs avoid redundant globbing and metadata reads.
-  - `core/prompt_enhancer/bridge.py` introduces `PromptEnhancerBridge` with lifecycle hooks: `prime(request: PromptEnhancerSpec)`, `enhance(prompts: List[str], context: PromptEnhancerContext)` and `reset()`. The bridge chooses provider backends (local Florence, remote API, noop) based on `server_config`, encapsulating the enhancer bootstrap that currently lives in `wgp.setup_prompt_enhancer`.
+  - `core/lora/manager.LoRAInjectionManager` now wraps `wgp.setup_loras` with memoised discovery keyed on `(model_type, server_config_hash)`, exposing `hydrate`, `presets`, `resolve_preset`, `reset`, and `snapshot_state` helpers.
+  - `core/prompt_enhancer/bridge.PromptEnhancerBridge` guards `setup_prompt_enhancer`/`process_prompt_enhancer`, caching primed configs per server snapshot and providing `prime`, `enhance`, `reset`, and `snapshot_state` entrypoints.
 - **ProductionManager integration**
-  - `ProductionManager` will vend cached instances through `production_manager.lora_manager()` and `production_manager.prompt_enhancer()`. Instances are keyed by the effective `server_config` snapshot so CLI queue workers share caches but isolate per-run overrides (e.g. temporary LoRA directories).
-  - `GenerationRuntime` will request adapters during initialisation and thread them to `TaskInputManager` so queue serialization no longer imports `wgp` for preset metadata or enhancer defaults.
+  - `ProductionManager.lora_manager()` / `.prompt_enhancer()` vend cached adapter instances; callers may inject shared adapters when constructing managers so queue controllers reuse discovery caches.
+  - CLI `generate` hydrates LoRA listings via the adapter and reuses the same instances when building the runtime `ProductionManager`.
 - **TaskInputManager touchpoints**
-  - The manager gains `build_lora_payload(request: TaskPayload)` to translate CLI arguments into adapter calls and `resolve_prompt_enhancer(request: TaskPayload)` to fetch enhancer settings. Both methods return serialisable payloads so queue summaries and metadata writers stay deterministic.
-  - Existing helpers like `prepare_inputs_dict` will consume adapter-derived payloads rather than re-reading lora directories or enhancer configs.
+  - `prepare_inputs_dict` and settings loaders now hydrate LoRA inventories through `lora_inventory()` before resolving selections, keeping metadata prep aligned with adapter state.
+  - Follow-up work will add `build_lora_payload` / `resolve_prompt_enhancer` helpers so queue serialization records adapter payloads instead of raw `wgp` lookups.
 - **State management**
-  - LoRA caches persist in-memory only; a `LoRAState` dataclass tracks discovered files, preset manifests, and multiplier defaults for diagnostics. The adapter exposes `snapshot_state()` for logging/debug CLI flags.
-  - Prompt enhancer bridge stores a `PromptEnhancerRuntime` object (models/tokenizers/processors) behind a lazy loader so GPU memory is allocated only when an enhancer-enabled run is requested. `reset()` frees resources and clears the cached runtime.
+  - LoRA discovery is cached in-memory only; `snapshot_state()` exposes counts for debug flags, while `reset()` clears caches for future CLI hooks.
+  - Prompt enhancer priming is tracked per server hash; `reset()` releases models via the legacy helper until the runtime extraction lands.
 - **Implementation phases**
-  1. Land the adapter modules with shim implementations that call into the existing `wgp` helpers, plus unit-style smoke tests that validate caching behaviour with temporary directories.
-  2. Teach `ProductionManager` and `TaskInputManager` to depend on the new adapters, keeping `wgp.setup_loras`/`wgp.setup_prompt_enhancer` as temporary fallbacks for legacy callers.
-  3. Remove the fallback paths and delete the old helpers once CLI adoption is complete, documenting the transition in `docs/APPENDIX_HEADLESS.md`.
+  1. (done) Adapter shims plus smoke tests landed (`tests/test_lora_manager.py`, `tests/test_prompt_enhancer_bridge.py`).
+  2. (done) `ProductionManager`, `TaskInputManager`, and the CLI now depend on the adapters; `wgp` remains the execution backend for activation.
+  3. (pending) Remove the fallback paths and delete the old helpers once CLI adoption is complete, documenting the transition in `docs/APPENDIX_HEADLESS.md`.
 
 ## ProductionManager Dependency Snapshot
 

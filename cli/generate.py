@@ -8,7 +8,7 @@ import json
 from argparse import Namespace
 from logging import Logger
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Set, Tuple
 
 from cli.arguments import parse_cli_args
 from cli.telemetry import configure_logging
@@ -16,6 +16,7 @@ from cli.runner import CLIGenerationNotifier, build_send_cmd, make_cli_callback_
 from cli.queue_controller import QueueController
 from cli.queue_control_server import QueueControlServer
 from core.production_manager import ProductionManager
+from core.lora.manager import LoRAInjectionManager
 from core.task_inputs import TaskInputManager
 from cli.queue_state import reset_generation_counters, update_queue_tracking
 from shared.utils.notifications import configure_notifications
@@ -436,35 +437,20 @@ def _load_json_lora_preset(preset_path: Path) -> Tuple[List[str], str, Optional[
 
 
 def load_lora_preset_data(
-    wgp,
+    lora_manager: LoRAInjectionManager,
     model_type: str,
     preset_name: str,
-    available_loras: List[str],
-    lora_dir: Optional[Path],
+    available_loras: Sequence[str],
 ) -> Tuple[List[str], str, Optional[str], bool]:
-    if preset_name.endswith(".lset"):
-        loras_choices, loras_mult, preset_prompt, full_prompt, error = wgp.extract_preset(
-            model_type,
-            preset_name,
-            available_loras,
-        )
-        if error:
-            raise SystemExit(f"LoRA preset '{preset_name}' failed to load: {error}")
-        loras = [Path(choice).name for choice in loras_choices]
-        multipliers = _normalise_multiplier_value(loras_mult)
-        prompt_value = preset_prompt if isinstance(preset_prompt, str) and preset_prompt.strip() else None
-        return loras, multipliers, prompt_value, bool(full_prompt)
-
-    if lora_dir is None:
-        raise SystemExit("LoRA presets require a configured LoRA directory; none found.")
-    preset_path = lora_dir / preset_name
-    if not preset_path.exists():
-        raise SystemExit(f"LoRA preset '{preset_name}' not found in {lora_dir}.")
-    return _load_json_lora_preset(preset_path)
+    try:
+        result = lora_manager.resolve_preset(model_type, preset_name, available_loras=available_loras)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
+    return list(result.names), result.multipliers, result.prompt, result.prompt_is_full
 
 
 def resolve_lora_selection(
-    wgp,
+    lora_manager: LoRAInjectionManager,
     args: Namespace,
     available_loras: List[str],
     available_presets: List[str],
@@ -499,11 +485,10 @@ def resolve_lora_selection(
             )
         preset_name = resolved_preset
         preset_loras, preset_multipliers, preset_prompt_value, preset_full_prompt = load_lora_preset_data(
-            wgp,
+            lora_manager,
             model_type,
             resolved_preset,
             available_loras,
-            lora_dir,
         )
         if multipliers is None:
             multipliers = preset_multipliers
@@ -736,24 +721,22 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         wgp.transformer_quantization,
         wgp.transformer_dtype_policy,
     )
-    lora_dir_str = wgp.get_lora_dir(model_type)
-    lora_dir = Path(lora_dir_str).expanduser() if lora_dir_str else None
-    preselected_preset = "" if args.lora_preset else wgp.lora_preselected_preset
+    bootstrap_manager = ProductionManager(wgp_module=wgp)
+    lora_manager = bootstrap_manager.lora_manager()
+    preselected_for_discovery = "" if args.lora_preset else None
     if args.lora_preset:
-        wgp.lora_preselected_preset = ""
-    loras, loras_presets, _, _, _, _ = wgp.setup_loras(
-        model_type,
-        None,
-        lora_dir_str,
-        preselected_preset,
-        None,
-    )
+        setattr(wgp, "lora_preselected_preset", "")
+    hydration = lora_manager.hydrate(model_type, preselected_preset=preselected_for_discovery)
+    lora_dir_path = hydration.library.lora_dir
+    lora_dir = lora_dir_path.expanduser() if lora_dir_path is not None else None
+    loras = list(hydration.library.loras)
+    loras_presets = list(hydration.library.presets)
 
     if maybe_handle_lora_listing(args, model_type, loras, loras_presets, lora_dir, logger):
         return 0
 
     lora_resolution = resolve_lora_selection(
-        wgp,
+        lora_manager,
         args,
         loras,
         loras_presets,
@@ -763,7 +746,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     output_dir = ensure_output_dirs(wgp, args.output_dir)
     state = build_state(wgp, model_type, model_filename, loras, loras_presets)
-    task_inputs_manager = ProductionManager(wgp_module=wgp).task_inputs()
+    task_inputs_manager = bootstrap_manager.task_inputs()
     base_settings: Optional[Dict[str, Any]] = None
     if args.settings_file is not None:
         base_settings = load_settings_defaults(
@@ -873,6 +856,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         default_notifier=notifier,
         default_callback_builder=callback_builder,
         task_input_manager=task_inputs_manager,
+        lora_manager=bootstrap_manager.lora_manager(),
+        prompt_enhancer=bootstrap_manager.prompt_enhancer(),
     )
     controller: QueueController | None = None
     control_server: QueueControlServer | None = None

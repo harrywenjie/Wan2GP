@@ -7,6 +7,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Dict, List, MutableMapping, Optional, Sequence, Tuple, Literal
 
+from core.lora.manager import LoRAHydrationResult, LoRAInjectionManager
+from core.prompt_enhancer.bridge import PromptEnhancerBridge
 from shared.utils.audio_metadata import read_audio_metadata
 from shared.utils.audio_video import read_image_metadata
 from shared.utils.loras_mutipliers import merge_loras_settings
@@ -157,6 +159,8 @@ class TaskInputManager:
         fix_settings: Callable[[str, Dict[str, Any], float], None],
         model_types: Sequence[str],
         loras_cache_path: Optional[Path] = None,
+        lora_manager: Optional[LoRAInjectionManager] = None,
+        prompt_enhancer: Optional[PromptEnhancerBridge] = None,
     ) -> None:
         self._server_config = server_config
         self._settings_version = settings_version
@@ -183,10 +187,26 @@ class TaskInputManager:
         self._model_types = frozenset(model_types)
         self._loras_cache_path = loras_cache_path or Path("loras_url_cache.json")
         self._loras_url_cache: Optional[Dict[str, str]] = None
+        self._lora_manager = lora_manager
+        self._prompt_enhancer_bridge = prompt_enhancer
+        self._lora_hydrations: Dict[str, LoRAHydrationResult] = {}
 
     @property
     def server_config(self) -> MutableMapping[str, Any]:
         return self._server_config
+
+    def lora_inventory(self, model_type: str, *, refresh: bool = False) -> Optional[LoRAHydrationResult]:
+        if self._lora_manager is None:
+            return None
+        hydration = self._lora_manager.hydrate(model_type, refresh=refresh)
+        self._lora_hydrations[model_type] = hydration
+        return hydration
+
+    def _lora_dir_for_model(self, model_type: str) -> Optional[str]:
+        hydration = self.lora_inventory(model_type)
+        if hydration is not None and hydration.library.lora_dir is not None:
+            return str(hydration.library.lora_dir)
+        return self._get_lora_dir(model_type)
 
     def prepare_inputs_dict(
         self,
@@ -205,7 +225,7 @@ class TaskInputManager:
         if model_type is None:
             model_type = state["model_type"]
 
-        lora_dir = self._get_lora_dir(model_type)
+        lora_dir = self._lora_dir_for_model(model_type)
         inputs["activated_loras"] = self.resolve_loras_selection(lora_dir, loras_choices)
 
         if target == "state":
@@ -434,7 +454,7 @@ class TaskInputManager:
 
     def _resolve_loras_url_cache(
         self,
-        lora_dir: str,
+        lora_dir: Optional[str],
         loras_selected: Optional[Sequence[str]],
     ) -> Optional[List[str]]:
         if loras_selected is None:
@@ -446,9 +466,10 @@ class TaskInputManager:
         cache = self._loras_url_cache
         updated = False
         resolved: List[str] = []
+        base_dir = lora_dir or ""
         for lora in loras_selected:
             base_name = os.path.basename(lora)
-            local_name = os.path.join(lora_dir, base_name)
+            local_name = os.path.join(base_dir, base_name) if base_dir else base_name
             url = cache.get(local_name, base_name)
             if (lora.startswith("http:") or lora.startswith("https:")) and url != lora:
                 cache[local_name] = lora
@@ -461,7 +482,7 @@ class TaskInputManager:
 
     def resolve_loras_selection(
         self,
-        lora_dir: str,
+        lora_dir: Optional[str],
         loras_selected: Optional[Sequence[str]],
     ) -> Optional[List[str]]:
         return self._resolve_loras_url_cache(lora_dir, loras_selected)
@@ -555,7 +576,7 @@ class TaskInputManager:
             defaults.update(configs)
             configs = defaults
 
-        lora_dir = self._get_lora_dir(model_type)
+        lora_dir = self._lora_dir_for_model(model_type)
         loras_selected = configs.get("activated_loras") or []
         loras_multipliers = configs.get("loras_multipliers", "")
         if loras_selected:

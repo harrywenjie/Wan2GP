@@ -29,6 +29,7 @@ python -m cli.generate \
 - `--guidance-scale FLOAT` – sets all CFG guidance scales uniformly.
 - `--prompt-enhancer {off,text,image,text+image}` – toggle the built-in prompt enhancer. `text` runs the LLM rewrite only, `image` captions the first reference frame, and `text+image` combines both. Overrides apply to the active run only; omit the flag to reuse the persisted default (usually disabled).
 - `--prompt-enhancer-provider {llama3_2,joycaption}` – pick which backend to load when the enhancer is active. Defaults to `llama3_2`; requires `--prompt-enhancer`. Like other runtime toggles this selection is per-run unless written into `wgp_config.json` manually.
+- Prompt enhancer priming is mediated by `core.prompt_enhancer.bridge.PromptEnhancerBridge`; the bridge caches loaded models per server configuration so repeat runs avoid gratuitous reloads, while `reset()` support will surface as a CLI flag in a later pass.
 - `--seed INT` – fixed seed for deterministic runs. Use `-1` to request a random seed from the pipeline.
 - `--force-fps {auto,control,source,INT}` – override the output frame rate or reuse preset behaviour.
 
@@ -37,6 +38,8 @@ python -m cli.generate \
 - `--loras NAME` – activate a LoRA by file name. Repeat the flag to layer multiple weights (names follow the files under `models/<model>/loras/`).
 - `--lora-multipliers STRING` – supply an explicit multiplier string (same syntax as legacy presets) to override preset defaults.
 - `--lora-preset NAME` – load a `.lset`/`.json` preset from the model’s LoRA directory. The preset merges with any `--loras` and multiplier overrides supplied on the CLI.
+
+LoRA discovery now flows through `core.lora.manager.LoRAInjectionManager`, so repeated listings reuse cached directory scans keyed on `(model_type, server_config_hash)`. Cache resets are automatic when the server configuration changes; explicit reset hooks will land alongside future CLI flags.
 
 Macro-based prompt assembly and the legacy “wizard” surface have been removed; author prompts directly or script your own templating before invoking the CLI.
 
