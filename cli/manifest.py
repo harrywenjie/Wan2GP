@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.io.media import (
     AudioSaveConfig,
@@ -194,3 +195,117 @@ def write_manifest_entry(path: Path, entry: Dict[str, Any]) -> None:
     with path.open("a", encoding="utf-8") as handle:
         handle.write(serialised)
         handle.write("\n")
+
+
+def resolve_manifest_path(value: Any) -> Path:
+    """Expand and resolve manifest-related filesystem paths."""
+
+    path = value if isinstance(value, Path) else Path(str(value))
+    try:
+        return path.expanduser().resolve()
+    except Exception:
+        return path.expanduser()
+
+
+def _pop_capture(
+    capture_index: Dict[Tuple[str, Path], List[ArtifactCapture]],
+    kind: str,
+    target_path: Path,
+) -> Optional[ArtifactCapture]:
+    resolved = resolve_manifest_path(target_path)
+    key = (kind, resolved)
+    captures = capture_index.get(key)
+    if captures:
+        capture = captures.pop(0)
+        if not captures:
+            capture_index.pop(key, None)
+        return capture
+    if kind == "video":
+        tmp_key = (kind, resolved.with_stem(f"{resolved.stem}_tmp"))
+        captures = capture_index.get(tmp_key)
+        if captures:
+            capture = captures.pop(0)
+            if not captures:
+                capture_index.pop(tmp_key, None)
+            return capture
+    return None
+
+
+def build_matanyone_artifacts(
+    *,
+    foreground_path: Path,
+    alpha_path: Path,
+    rgba_zip_path: Optional[Path],
+    frames_processed: int,
+    fps: float,
+    metadata_mode: str,
+    captures: Sequence[ArtifactCapture],
+    codec: Optional[str],
+    container: Optional[str],
+) -> List[Dict[str, Any]]:
+    """Assemble MatAnyOne artifact descriptors for manifest emission."""
+
+    capture_index: Dict[Tuple[str, Path], List[ArtifactCapture]] = defaultdict(list)
+    for capture in captures:
+        resolved = resolve_manifest_path(capture.path)
+        capture_index[(capture.kind, resolved)].append(capture)
+
+    def _build_video_entry(role: str, path: Path) -> Dict[str, Any]:
+        capture = _pop_capture(capture_index, "video", path)
+        resolved = resolve_manifest_path(path)
+        entry_container = container
+        entry_codec = codec
+        effective_fps = fps
+        if capture and capture.config is not None:
+            entry_container = getattr(capture.config, "container", entry_container) or entry_container
+            entry_codec = getattr(capture.config, "codec_type", entry_codec) or entry_codec
+            effective_fps = getattr(capture.config, "fps", effective_fps) or effective_fps
+
+        if entry_container:
+            normalized_container = str(entry_container)
+            entry_container = normalized_container[1:] if normalized_container.startswith(".") else normalized_container
+        else:
+            entry_container = resolved.suffix.lstrip(".") or None
+
+        duration_value: Optional[float] = None
+        try:
+            if frames_processed is not None and effective_fps:
+                duration_value = frames_processed / float(effective_fps)
+        except (ZeroDivisionError, TypeError, ValueError):
+            duration_value = None
+
+        metadata_sidecar: Optional[str] = None
+        if metadata_mode == "json":
+            metadata_sidecar = str(resolved.with_suffix(".json"))
+
+        return {
+            "role": role,
+            "path": str(resolved),
+            "container": entry_container,
+            "codec": entry_codec,
+            "frames": frames_processed,
+            "duration_s": duration_value,
+            "metadata_sidecar": metadata_sidecar,
+        }
+
+    artifacts: List[Dict[str, Any]] = [
+        _build_video_entry("mask_foreground", foreground_path),
+        _build_video_entry("mask_alpha", alpha_path),
+    ]
+
+    if rgba_zip_path is not None:
+        _pop_capture(capture_index, "mask_archive", rgba_zip_path)
+        resolved = resolve_manifest_path(rgba_zip_path)
+        artifacts.append(
+            {
+                "role": "rgba_archive",
+                "path": str(resolved),
+                "container": resolved.suffix.lstrip(".") or None,
+                "codec": None,
+                "frames": None,
+                "duration_s": None,
+                "metadata_sidecar": None,
+            }
+        )
+
+    return artifacts

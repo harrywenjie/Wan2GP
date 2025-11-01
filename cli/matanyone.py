@@ -4,13 +4,22 @@
 from __future__ import annotations
 
 import argparse
+import uuid
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, Optional, Tuple
 
+from cli.manifest import (
+    ManifestRecorder,
+    build_matanyone_artifacts,
+    canonicalize_structure,
+    resolve_manifest_path,
+    write_manifest_entry,
+)
 from cli.telemetry import configure_logging
 from shared.utils.notifications import configure_notifications
-from preprocessing.matanyone.app import MatAnyOneRequest, generate_masks
+from preprocessing.matanyone.app import MatAnyOneRequest, MatAnyOneResult, generate_masks
 from core.production_manager import MetadataState, ProductionManager
 
 try:  # Optional import for typing without runtime dependency
@@ -125,6 +134,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Validate inputs and print the resolved request without running propagation.",
     )
+    parser.add_argument(
+        "--manifest-path",
+        type=Path,
+        default=None,
+        help="Path to append manifest entries (defaults to <output_dir>/manifests/run_history.jsonl).",
+    )
     return parser
 
 
@@ -172,6 +187,96 @@ def _resolve_runtime_contexts(
     return metadata_state, media_context
 
 
+def _build_manifest_inputs(
+    args: argparse.Namespace,
+    request: Optional[MatAnyOneRequest],
+) -> Dict[str, Any]:
+    if request is not None:
+        return {
+            "input_path": str(request.input_path),
+            "template_mask_path": str(request.template_mask_path),
+            "output_dir": str(request.output_dir),
+            "start_frame": request.start_frame,
+            "end_frame": request.end_frame,
+            "new_dim": request.new_dim,
+            "mask_type": request.mask_type,
+            "matting_type": request.matting_type,
+            "erode_kernel_size": request.erode_kernel_size,
+            "dilate_kernel_size": request.dilate_kernel_size,
+            "warmup_frames": request.warmup_frames,
+            "device": request.device,
+            "codec": request.codec,
+            "attach_audio": request.attach_audio,
+            "metadata_mode": request.metadata_mode,
+        }
+
+    return {
+        "input_path": str(args.input.expanduser()),
+        "template_mask_path": str(args.template_mask.expanduser()),
+        "output_dir": str(args.output_dir.expanduser()),
+        "start_frame": args.start_frame,
+        "end_frame": args.end_frame,
+        "new_dim": args.new_dim,
+        "mask_type": args.mask_type,
+        "matting_type": args.matting,
+        "erode_kernel_size": args.erode_kernel,
+        "dilate_kernel_size": args.dilate_kernel,
+        "warmup_frames": args.warmup_frames,
+        "device": args.device,
+        "codec": args.codec,
+        "attach_audio": args.attach_audio,
+        "metadata_mode": args.metadata_mode,
+    }
+
+
+def _emit_manifest_entry(
+    *,
+    path: Optional[Path],
+    run_id: str,
+    output_dir: Path,
+    metadata_mode: str,
+    status: str,
+    inputs: Dict[str, Any],
+    recorder: Optional[ManifestRecorder],
+    result: Optional[MatAnyOneResult],
+    error: Optional[str],
+) -> None:
+    if path is None:
+        return
+
+    entry: Dict[str, Any] = {
+        "run_id": run_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "output_dir": str(resolve_manifest_path(output_dir)),
+        "metadata_mode": metadata_mode,
+        "status": status,
+        "inputs": canonicalize_structure(inputs),
+        "adapter_payload_hashes": {},
+    }
+
+    if status == "success" and result is not None:
+        codec = result.metadata.get("codec") if isinstance(result.metadata, dict) else None
+        container = result.metadata.get("container") if isinstance(result.metadata, dict) else None
+        captures = recorder.captures if recorder is not None else ()
+        entry["artifacts"] = build_matanyone_artifacts(
+            foreground_path=result.foreground_path,
+            alpha_path=result.alpha_path,
+            rgba_zip_path=result.rgba_zip_path,
+            frames_processed=result.frames_processed,
+            fps=result.fps,
+            metadata_mode=metadata_mode,
+            captures=captures,
+            codec=codec,
+            container=container,
+        )
+    else:
+        entry["artifacts"] = []
+        if error:
+            entry["error"] = error
+
+    write_manifest_entry(path, entry)
+
+
 def _resolve_path(path: Path, description: str) -> Path:
     resolved = path.expanduser()
     if not resolved.exists():
@@ -191,11 +296,27 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         metadata_state.choice if metadata_state and metadata_state.choice else args.metadata_mode
     )
 
+    resolved_output_dir = args.output_dir.expanduser().resolve()
+    manifest_recorder: Optional[ManifestRecorder] = None
+    manifest_path: Optional[Path] = None
+    run_id = str(uuid.uuid4())
+    if not args.dry_run:
+        manifest_recorder = ManifestRecorder()
+        default_manifest = resolved_output_dir / "manifests" / "run_history.jsonl"
+        manifest_target = args.manifest_path if args.manifest_path is not None else default_manifest
+        manifest_path = resolve_manifest_path(manifest_target)
+        if media_context is not None:
+            media_context = manifest_recorder.wrap(media_context)
+
+    request: Optional[MatAnyOneRequest] = None
+    manifest_status = "success"
+    manifest_error: Optional[str] = None
+
     try:
         request = MatAnyOneRequest(
             input_path=_resolve_path(args.input, "Source input"),
             template_mask_path=_resolve_path(args.template_mask, "Template mask"),
-            output_dir=args.output_dir.expanduser().resolve(),
+            output_dir=resolved_output_dir,
             start_frame=args.start_frame,
             end_frame=args.end_frame,
             new_dim=args.new_dim or "",
@@ -216,7 +337,23 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         raise
     except Exception as exc:  # pragma: no cover - defensive
         logger.error("Failed to build MatAnyOne request: %s", exc)
+        manifest_status = "error"
+        manifest_error = f"Failed to build request: {exc}"
+        inputs_payload = _build_manifest_inputs(args, None)
+        _emit_manifest_entry(
+            path=manifest_path,
+            run_id=run_id,
+            output_dir=resolved_output_dir,
+            metadata_mode=metadata_mode,
+            status=manifest_status,
+            inputs=inputs_payload,
+            recorder=manifest_recorder,
+            result=None,
+            error=manifest_error,
+        )
         return 1
+
+    metadata_mode = request.metadata_mode
 
     request.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -243,12 +380,33 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         print("MatAnyOne dry-run successful; no propagation executed.")
         return 0
 
+    manifest_inputs = _build_manifest_inputs(args, request)
+
     state = {"gen": {}}
+    result: Optional[MatAnyOneResult] = None
+    exit_code = 0
     try:
         result = generate_masks(state, request)
     except Exception as exc:  # pragma: no cover - pipeline errors surfaced to CLI
+        manifest_status = "error"
+        manifest_error = str(exc)
+        exit_code = 1
         logger.error("MatAnyOne propagation failed: %s", exc, exc_info=True)
-        return 1
+
+    _emit_manifest_entry(
+        path=manifest_path,
+        run_id=run_id,
+        output_dir=request.output_dir,
+        metadata_mode=metadata_mode,
+        status=manifest_status,
+        inputs=manifest_inputs,
+        recorder=manifest_recorder,
+        result=result if manifest_status == "success" else None,
+        error=manifest_error,
+    )
+
+    if exit_code != 0 or result is None:
+        return exit_code
 
     logger.info("MatAnyOne propagation completed successfully.")
     logger.info("  foreground_path: %s", result.foreground_path)

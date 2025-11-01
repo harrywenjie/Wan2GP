@@ -44,18 +44,19 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ## Validation Expectations
 - For CLI regression checks, run `python -m cli.generate --prompt "smoke test prompt" --dry-run --log-level INFO` to confirm argument parsing, logging, and runtime overrides.
 - Exercise preprocessing changes with `python -m cli.matanyone --input <video> --template-mask <mask> --dry-run` (or a short real run when GPU time permits).
+- When MatAnyOne emits artifacts, inspect `<output_dir>/manifests/run_history.jsonl` (or the `--manifest-path` override) and confirm entries include `mask_foreground`, `mask_alpha`, and optional `rgba_archive` roles.
 - Record timing, VRAM usage, and output artifact paths in `docs/WORK_HISTORY.md` whenever a command executes generation or preprocessing work.
 - Keep any ad-hoc validation scripts lightweight and remove them once automated coverage exists.
 
 ---
 
 ## Immediate Next Actions
-- Extend the artifact manifest recorder to MatAnyOne so mask/audio workflows emit JSONL alongside CLI runs.
-  - **Proposal (2025-11-01)**: Reuse `ManifestRecorder` inside `cli.matanyone`, wiring the recorder through the pipeline so foreground/alpha exports write entries to the shared manifest path.
-  - **Rationale**: Keeps preprocessing outputs visible to schedulers and ensures manifest consumers can correlate masks/audio with generation runs.
-  - **Design (2025-11-01)**: Thread the recorder through `ProductionManager.media_context()` when MatAnyOne initialises, map mask roles (`mask_foreground`, `mask_alpha`, `rgba_archive`), and mirror the CLI error-handling gates to avoid partial records.
-- Retire legacy `wgp.save_video/save_image` wrappers now that context enforcement is in place.
-  - **Proposal (2025-11-01)**: Audit remaining call sites for the wrappers, migrate any stragglers (MatAnyOne, shared utils) onto `MediaPersistenceContext`, and delete the legacy functions.
-  - **Rationale**: Simplifies persistence to a single surface, eliminates duplicate retry logic, and clears dead imports from preprocessing modules.
-  - **Design (2025-11-01)**: Use `rg` to locate wrapper references, patch consumers to take a `MediaPersistenceContext`, drop the wrapper definitions, and expand tests to cover the new entry points.
+- Finish retiring `shared.utils.audio_video.save_*` adapters by migrating remaining consumers onto `core.io.media` helpers.
+  - **Proposal (2025-11-02)**: Use `rg` to enumerate the outstanding adapters (audio/video/image) under `shared/utils` and refactor each caller to request a `MediaPersistenceContext` or call `write_*` directly.
+  - **Rationale**: Completing the migration collapses persistence onto one implementation, simplifies logging/retry behaviour, and clears the final GUI-era shims.
+  - **Design (2025-11-02)**: Stage conversions module-by-module, replacing adapter imports with context usage, add focused tests where coverage is missing, and delete the adapter functions once call sites are gone.
+- Add an integration smoke test for `cli.matanyone` that exercises manifest emission end-to-end.
+  - **Proposal (2025-11-02)**: Invoke the CLI against a tiny fixture (dry-run plus a short real run when possible) and assert the JSONL manifest contains `mask_foreground`, `mask_alpha`, and optional `rgba_archive` entries.
+  - **Rationale**: Guards the new manifest pathway against regressions in CLI argument parsing, context wrapping, and recorder plumbing.
+  - **Design (2025-11-02)**: Use a temporary output directory, run with `--dry-run` to confirm no file writes, then trigger a minimal propagation mocked via dependency injection and inspect the emitted JSONL before teardown.
   

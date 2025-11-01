@@ -21,6 +21,7 @@ from cli.manifest import (
     ManifestRecorder,
     canonicalize_structure,
     compute_adapter_hashes,
+    resolve_manifest_path,
     write_manifest_entry,
 )
 from cli.telemetry import configure_logging
@@ -52,14 +53,6 @@ def _resolve_prompt_enhancer_mode(mode: Optional[str]) -> Optional[str]:
     if mode == "off":
         return ""
     return PROMPT_ENHANCER_MODE_MAP[mode]
-
-
-def _resolve_manifest_path(value: Any) -> Path:
-    path = value if isinstance(value, Path) else Path(str(value))
-    try:
-        return path.expanduser().resolve()
-    except Exception:
-        return path.expanduser()
 
 
 def _coerce_int(value: Any) -> Optional[int]:
@@ -103,7 +96,7 @@ def _build_manifest_artifacts(
 
     capture_index: Dict[Tuple[str, Path], List[ArtifactCapture]] = defaultdict(list)
     for capture in captures:
-        resolved = _resolve_manifest_path(capture.path)
+        resolved = resolve_manifest_path(capture.path)
         capture_index[(capture.kind, resolved)].append(capture)
 
     artifacts: List[Dict[str, Any]] = []
@@ -112,7 +105,7 @@ def _build_manifest_artifacts(
         if path_str is None:
             continue
         settings = settings or {}
-        resolved = _resolve_manifest_path(path_str)
+        resolved = resolve_manifest_path(path_str)
         matched = _pop_capture(capture_index, "video", resolved)
         container = getattr(matched.config, "container", None) if matched else None
         codec = getattr(matched.config, "codec_type", None) if matched else None
@@ -145,7 +138,7 @@ def _build_manifest_artifacts(
         if path_str is None:
             continue
         settings = settings or {}
-        resolved = _resolve_manifest_path(path_str)
+        resolved = resolve_manifest_path(path_str)
         matched = _pop_capture(capture_index, "audio", resolved)
         container = getattr(matched.config, "format", None) if matched else None
         codec = getattr(matched.config, "subtype", None) if matched else None
@@ -1046,7 +1039,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         manager.media_context = MethodType(media_context_override, manager)
         default_manifest = output_dir / "manifests" / "run_history.jsonl"
         manifest_target = args.manifest_path if args.manifest_path is not None else default_manifest
-        manifest_path = _resolve_manifest_path(manifest_target)
+        manifest_path = resolve_manifest_path(manifest_target)
 
     controller: QueueController | None = None
     control_server: QueueControlServer | None = None
@@ -1138,7 +1131,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             manifest_entry: Dict[str, Any] = {
                 "run_id": run_id,
                 "timestamp": completion_time.astimezone(timezone.utc).isoformat(),
-                "output_dir": str(_resolve_manifest_path(output_dir)),
+                "output_dir": str(resolve_manifest_path(output_dir)),
                 "metadata_mode": resolved_metadata_mode,
                 "status": manifest_status,
                 "inputs": canonicalize_structure(inputs_payload),

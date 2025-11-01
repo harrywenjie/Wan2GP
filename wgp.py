@@ -38,7 +38,7 @@ from shared.utils.notifications import (
 )
 from shared.utils import notification_sound
 from shared.utils.loras_mutipliers import preparse_loras_multipliers, parse_loras_multipliers
-from shared.utils.utils import convert_tensor_to_image, save_image, get_video_info, get_file_creation_date, convert_image_to_video, calculate_new_dimensions, convert_image_to_tensor, calculate_dimensions_and_resize_image, rescale_and_crop, get_video_frame, resize_and_remove_background, rgb_bw_to_rgba_mask
+from shared.utils.utils import convert_tensor_to_image, get_video_info, get_file_creation_date, convert_image_to_video, calculate_new_dimensions, convert_image_to_tensor, calculate_dimensions_and_resize_image, rescale_and_crop, get_video_frame, resize_and_remove_background, rgb_bw_to_rgba_mask
 from shared.utils.utils import calculate_new_dimensions, get_outpainting_frame_location, get_outpainting_full_area_dimensions
 from shared.utils.utils import has_video_file_extension, has_image_file_extension, has_audio_file_extension
 from shared.utils.audio_video import (
@@ -46,8 +46,6 @@ from shared.utils.audio_video import (
     combine_video_with_audio_tracks,
     combine_and_concatenate_video_with_audio_tracks,
     cleanup_temp_audio_files,
-    save_video as _save_video,
-    save_image as _save_image,
 )
 from shared.notifications import create_legacy_notifier
 from shared.utils.audio_video import read_image_metadata
@@ -65,9 +63,7 @@ from core.io.media import (
     MetadataSaveConfig,
     VideoSaveConfig,
     build_metadata_config,
-    write_image,
     write_metadata_bundle,
-    write_video,
 )
 from huggingface_hub import hf_hub_download, snapshot_download
 from shared.utils import files_locator as fl 
@@ -86,59 +82,6 @@ if TYPE_CHECKING:
     from core.production_manager import MetadataState
 else:
     MetadataState = typing.Any  # type: ignore[misc]
-
-
-def save_video(*args, config: Optional[VideoSaveConfig] = None, **kwargs):
-    """
-    Wrapper around ``shared.utils.audio_video.save_video`` that ensures logging flows
-    through the notifications logger configured by the CLI.
-    """
-
-    logger = kwargs.pop("logger", None) or get_notifications_logger()
-    tensor = kwargs.pop("tensor", None)
-    save_file = kwargs.pop("save_file", None)
-    remaining_args = list(args)
-
-    if tensor is None and remaining_args:
-        tensor = remaining_args.pop(0)
-    if save_file is None and remaining_args:
-        save_file = remaining_args.pop(0)
-
-    if config is not None:
-        return write_video(tensor, save_file, config=config, logger=logger)
-
-    if tensor is not None:
-        kwargs.setdefault("tensor", tensor)
-    if save_file is not None:
-        kwargs.setdefault("save_file", save_file)
-    kwargs["logger"] = logger
-    return _save_video(*remaining_args, **kwargs)
-
-
-def save_image(*args, config: Optional[ImageSaveConfig] = None, **kwargs):
-    """
-    Wrapper around ``shared.utils.audio_video.save_image`` with logger injection.
-    """
-
-    logger = kwargs.pop("logger", None) or get_notifications_logger()
-    tensor = kwargs.pop("tensor", None)
-    save_file = kwargs.pop("save_file", None)
-    remaining_args = list(args)
-
-    if tensor is None and remaining_args:
-        tensor = remaining_args.pop(0)
-    if save_file is None and remaining_args:
-        save_file = remaining_args.pop(0)
-
-    if config is not None:
-        return write_image(tensor, save_file, config=config, logger=logger)
-
-    if tensor is not None:
-        kwargs.setdefault("tensor", tensor)
-    if save_file is not None:
-        kwargs.setdefault("save_file", save_file)
-    kwargs["logger"] = logger
-    return _save_image(*remaining_args, **kwargs)
 
 
 def _resolve_metadata_config(

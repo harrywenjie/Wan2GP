@@ -21,14 +21,19 @@ import numpy as np
 import torch
 from PIL import Image
 
-from core.io.media import MediaPersistenceContext, build_metadata_config, write_metadata_bundle
+from core.io.media import (
+    MediaPersistenceContext,
+    VideoSaveConfig,
+    build_metadata_config,
+    write_metadata_bundle,
+    write_video,
+)
 from core.production_manager import MetadataState
 from shared.utils import files_locator as fl
 from shared.utils.audio_video import (
     cleanup_temp_audio_files,
     combine_video_with_audio_tracks,
     extract_audio_tracks,
-    save_video,
 )
 from shared.utils.notifications import get_notifications_logger
 from shared.utils.process_locks import acquire_GPU_ressources, release_GPU_ressources
@@ -459,11 +464,15 @@ def _save_video_artifact(
         except AttributeError:
             pass
     target = _ensure_container_suffix(base_path, _effective_container(request))
-    saved_path = save_video(
-        data,
-        str(target),
+    fallback_config = VideoSaveConfig(
         fps=_safe_fps(fps),
         codec_type=_effective_codec(request),
+        container=target.suffix.lstrip(".") or _effective_container(request),
+    )
+    saved_path = write_video(
+        data,
+        str(target),
+        config=fallback_config,
         logger=logger,
     )
     return Path(saved_path if saved_path else target)
