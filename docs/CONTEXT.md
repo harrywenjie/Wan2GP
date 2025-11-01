@@ -12,10 +12,11 @@
 - `preprocessing/matanyone/app.py` is a headless pipeline that assumes on-disk source media/masks and GPU availability.
 - `cli/matanyone.py` wraps the pipeline with logging, input validation, frame/mask/audio controls, optional dry-run mode, and forwards requests to `generate_masks` using the shared CLI notifier. When `wgp` is available the CLI clones both `ProductionManager.metadata_state()` and `media_context()` so MatAnyOne writes metadata with the same templates and persists media through the shared context. Outputs land under `mask_outputs/` with container/codec overrides pulled from `server_config`; RGBA ZIP bundles now respect the context `save_masks` toggle while audio tracks are reattached onto the resolved container when requested.
 - `tests/test_matanyone_persistence.py` guards the context-driven persistence flow by asserting video saves honour codec/container overrides and that mask archives follow the `save_masks` gating, with follow-up coverage planned for the audio mux path.
+- `tests/test_matanyone_cli_integration.py` exercises the CLI end-to-end, patching the heavy pipeline while asserting the manifest records `mask_foreground`, `mask_alpha`, and `rgba_archive` artifacts plus expected metadata sidecars.
 
 ## Metadata & IO
 
-- `core/io/media.py` houses media persistence (`write_video`, `write_image`) plus `write_metadata_bundle`, all with logger-aware retry handling; `shared.utils.audio_video` is now a thin adapter that injects the CLI notifications logger.
+- `core/io/media.py` houses media persistence (`write_video`, `write_image`) plus `write_metadata_bundle`, all with logger-aware retry handling; `shared.utils.audio_video` now only exposes audio track utilities and metadata readers after retiring the legacy `save_*` shims.
 - `ProductionManager.metadata_state()` returns a per-run `MetadataState` snapshot (choice + cloned templates). `GenerationRuntime` forwards the snapshot to `wgp.generate_video`, replacing the old module-level `metadata_choice` / `metadata_configs`.
 - `_resolve_metadata_config` accepts either the dataclass or a dict for backward compatibility. CLI runs still honour `--metadata-mode`; MatAnyOne now passes the cloned `MetadataState` snapshot directly into its writers so embedded metadata and JSON sidecars stay aligned with the core generation pipeline.
 - Embedded source images for metadata remain gated by `server_config["embed_source_images"]`; JSON sidecars are emitted when `metadata_mode=json`.
@@ -23,11 +24,11 @@
 - Artifact manifests will be emitted as JSONL (`manifests/run_history.jsonl` inside the resolved `output_dir`). Each entry records saved artifact paths, the effective metadata mode, a reproducibility snapshot of CLI inputs, and SHA-256 hashes of adapter payloads derived from their canonical JSON serialisations (see `docs/CLI.md` for the public schema). Writers flush entries only after persistence succeeds; dry runs skip emission.
 - `cli.generate` now wraps `ProductionManager.media_context()` with a `ManifestRecorder`, capturing every `MediaPersistenceContext.save_*` invocation before the JSONL writer emits a row. Adapter payload hashes are derived from canonical JSON, and failures log an `"error"` field while omitting artifacts so partially persisted runs never leak into downstream automation.
 
-### Persistence Surface Update (2025-11-02)
+### Persistence Surface Update (2025-11-03)
 
 - `wgp.save_video/save_image` have been removed. All persistence now flows through `MediaPersistenceContext` or directly into `core.io.media.write_*`, keeping a single code path for retries and logging.
 - MatAnyOne fallbacks now call `write_video` when a context is unavailable, preserving codec/container overrides without touching the legacy `shared.utils.audio_video` shims.
-- Remaining adapters under `shared.utils.audio_video` exist only for historical preprocessors; track the lingering imports (`shared.utils.utils.save_image`, `models/wan/*/utils.py::save_video`) and prune them as those flows are retired.
+- The legacy `shared.utils.audio_video.save_*` adapters have been deleted; any lagging preprocessors must migrate to `MediaPersistenceContext` or call `core.io.media.write_*` directly to preserve logging and retry behaviour.
 
 ## Pending Extraction Work
 

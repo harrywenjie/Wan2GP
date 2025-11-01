@@ -177,5 +177,6 @@ Successful runs log the written file paths and echo them to STDOUT. Expect:
 - A manifest line appended to `<output_dir>/manifests/run_history.jsonl` (or `--manifest-path`), capturing inputs and artifacts with `mask_foreground`, `mask_alpha`, and `rgba_archive` roles.
 
 MatAnyOne now threads the per-run `MediaPersistenceContext` supplied by `ProductionManager` and records artifact manifests alongside CLI runs. Video writes honour container/codec overrides (with `--codec` acting as a per-run override), audio tracks are reattached onto the context-derived container, and mask archives respect the `save_masks` toggle so debug bundles only materialise when explicitly configured. Persistence helpers retain retry logging so automation can detect and react to IO errors deterministically.
+Automated coverage: `tests/test_matanyone_cli_integration.py` patches the heavy pipeline while invoking the CLI end-to-end, asserting the manifest captures `mask_foreground`, `mask_alpha`, and `rgba_archive` artifacts plus JSON sidecars when running with `--metadata-mode json`.
 
 For architectural notes and migration history consult `PROJECT_PLAN_LIVE.md`. External scripts may reuse the bootstrap directly via `import wgp; wgp.ensure_runtime_initialized()` before calling lower level helpers.

@@ -1,18 +1,10 @@
 import subprocess
 import tempfile, os
-from typing import Callable, Optional
 
 import ffmpeg
 import json
 from PIL import Image, PngImagePlugin
 
-from core.io.media import (
-    ImageSaveConfig,
-    VideoSaveConfig,
-    write_image,
-    write_video,
-)
-from shared.utils.notifications import get_notifications_logger
 
 def extract_audio_tracks(source_video, verbose=False, query_only=False):
     """
@@ -210,60 +202,6 @@ def cleanup_temp_audio_files(audio_tracks, verbose=False):
         print(f"Successfully deleted {deleted_count} temporary audio file(s)")
     
     return deleted_count
-
-
-def save_video(
-    tensor,
-    save_file=None,
-    fps=30,
-    codec_type='libx264_8',
-    container='mp4',
-    nrow=8,
-    normalize=True,
-    value_range=(-1, 1),
-    retry=5,
-    logger: Optional[Callable[[str], None]] = None,
-):
-    """Save tensor as video with configurable codec and container options."""
-
-    config = VideoSaveConfig(
-        fps=fps,
-        codec_type=codec_type,
-        container=container,
-        nrow=nrow,
-        normalize=normalize,
-        value_range=value_range,
-        retry=retry,
-    )
-
-    resolved_logger = logger if logger is not None else get_notifications_logger()
-    return write_video(tensor, save_file, config=config, logger=resolved_logger)
-
-
-
-
-def save_image(
-    tensor,
-    save_file,
-    nrow=8,
-    normalize=True,
-    value_range=(-1, 1),
-    quality='jpeg_95',  # 'jpeg_95', 'jpeg_85', 'jpeg_70', 'jpeg_50', 'webp_95', 'webp_85', 'webp_70', 'webp_50', 'png', 'webp_lossless'
-    retry=5,
-    logger: Optional[Callable[[str], None]] = None,
-):
-    """Save tensor as image with configurable format and quality."""
-
-    config = ImageSaveConfig(
-        nrow=nrow,
-        normalize=normalize,
-        value_range=value_range,
-        quality=quality,
-        retry=retry,
-    )
-
-    resolved_logger = logger if logger is not None else get_notifications_logger()
-    return write_image(tensor, save_file, config=config, logger=resolved_logger)
 
 
 def _enc_uc(s):
