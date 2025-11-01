@@ -21,11 +21,8 @@ import numpy as np
 import torch
 from PIL import Image
 
-from core.io.media import (
-    MetadataSaveConfig,
-    build_metadata_config,
-    write_metadata_bundle,
-)
+from core.io.media import build_metadata_config, write_metadata_bundle
+from core.production_manager import MetadataState
 from shared.utils import files_locator as fl
 from shared.utils.audio_video import (
     cleanup_temp_audio_files,
@@ -91,7 +88,7 @@ class MatAnyOneRequest:
     attach_audio: bool = True
     codec: str = "libx264_8"
     metadata_mode: str = "metadata"
-    metadata_configs: Optional[Dict[str, MetadataSaveConfig]] = None
+    metadata_state: Optional[MetadataState] = None
     notifier: Optional[Callable[[str], None]] = None
 
     def __post_init__(self) -> None:
@@ -101,10 +98,25 @@ class MatAnyOneRequest:
         self.start_frame = int(self.start_frame)
         if self.end_frame is not None:
             self.end_frame = int(self.end_frame)
-        mode = (self.metadata_mode or "metadata").strip().lower()
-        if mode not in {"metadata", "json"}:
+        mode_source = (self.metadata_mode or "metadata").strip().lower()
+        state = self.metadata_state
+
+        if state is not None:
+            state_choice = (state.choice or "").strip().lower()
+            if not state_choice:
+                state_choice = mode_source
+            if state_choice not in {"metadata", "json"}:
+                raise ValueError(f"Unsupported metadata mode '{state.choice}'.")
+            # Rebuild the state with a normalised choice and cloned config map.
+            self.metadata_state = MetadataState(
+                choice=state_choice,
+                configs=dict(state.configs),
+            )
+            mode_source = state_choice
+
+        if mode_source not in {"metadata", "json"}:
             raise ValueError(f"Unsupported metadata mode '{self.metadata_mode}'.")
-        self.metadata_mode = mode
+        self.metadata_mode = mode_source
 
     @property
     def normalized_mask_type(self) -> str:
@@ -465,11 +477,11 @@ def _save_outputs(
     metadata["metadata_mode"] = request.metadata_mode
 
     metadata_mode = request.metadata_mode
-    metadata_config = (
-        build_metadata_config("video", templates=request.metadata_configs)
-        if metadata_mode == "metadata"
-        else None
-    )
+    metadata_state = request.metadata_state
+    metadata_config = None
+    if metadata_mode == "metadata":
+        templates = metadata_state.configs if metadata_state is not None else None
+        metadata_config = build_metadata_config("video", templates=templates)
     metadata_logger = media_logger if metadata_mode == "metadata" else None
 
     def _write_metadata(path: Path, payload: Dict[str, object]) -> None:

@@ -58,7 +58,7 @@ Runtime bootstrap now lives in `wgp.initialize_runtime()`, which loads `wgp_conf
 - [Done] Extract reusable config assembly so CLI/UI paths share one code path (`assemble_generation_params()`).
 - [In Progress] Implement a queue-friendly runner module that exposes events over the progress channel without importing Gradio.
 - [Pending] Ensure per-model hooks surface deterministic metadata for downstream automation (structured output manifests, JSONL logging).
-- [Done] `ProductionManager` now injects metadata defaults (`MetadataSaveConfig` + `metadata_type`) so CLI callers toggle between embedded metadata and JSON sidecars without mutating `wgp`.
+- [Done] `ProductionManager.metadata_state()` now clones per-run metadata templates so CLI generation and MatAnyOne toggle between embedded metadata and JSON sidecars without mutating `wgp`.
 
 ## Reference Notes
 - CLI flag surface: the canonical list lives in `docs/CLI.md`. Update that document when adding or removing arguments.

@@ -6,13 +6,12 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Dict, Iterable, Optional
+from typing import Iterable, Optional
 
 from cli.telemetry import configure_logging
 from shared.utils.notifications import configure_notifications
 from preprocessing.matanyone.app import MatAnyOneRequest, generate_masks
-from core.production_manager import ProductionManager
-from core.io.media import MetadataSaveConfig
+from core.production_manager import MetadataState, ProductionManager
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -129,25 +128,25 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _load_metadata_configs(logger) -> Optional[Dict[str, MetadataSaveConfig]]:
+def _resolve_metadata_state(logger, metadata_choice: str) -> Optional[MetadataState]:
     try:
         import wgp  # type: ignore  # pylint: disable=import-error
     except Exception as exc:  # pragma: no cover - import failure depends on environment
-        logger.debug("MatAnyOne metadata templates unavailable (import error): %s", exc)
+        logger.debug("MatAnyOne metadata state unavailable (import error): %s", exc)
         return None
 
     if hasattr(wgp, "ensure_runtime_initialized"):
         try:
             wgp.ensure_runtime_initialized()
         except Exception as exc:  # pragma: no cover - runtime init is environment-specific
-            logger.debug("MatAnyOne metadata templates unavailable (runtime init): %s", exc)
+            logger.debug("MatAnyOne metadata state unavailable (runtime init): %s", exc)
             return None
 
     try:
         manager = ProductionManager(wgp_module=wgp)
-        return manager.metadata_config_templates()
+        return manager.metadata_state(choice_override=metadata_choice)
     except Exception as exc:  # pragma: no cover - ProductionManager surface may evolve
-        logger.debug("MatAnyOne metadata templates unavailable (manager error): %s", exc)
+        logger.debug("MatAnyOne metadata state unavailable (manager error): %s", exc)
         return None
 
 
@@ -165,7 +164,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     logger = configure_logging(args.log_level)
     configure_notifications(logger)
 
-    metadata_configs = _load_metadata_configs(logger)
+    metadata_state = _resolve_metadata_state(logger, args.metadata_mode)
+    metadata_mode = (
+        metadata_state.choice if metadata_state and metadata_state.choice else args.metadata_mode
+    )
 
     try:
         request = MatAnyOneRequest(
@@ -183,8 +185,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             device=args.device,
             attach_audio=args.attach_audio,
             codec=args.codec,
-            metadata_mode=args.metadata_mode,
-            metadata_configs=metadata_configs,
+            metadata_mode=metadata_mode,
+            metadata_state=metadata_state,
             notifier=logger.info,
         )
     except SystemExit:

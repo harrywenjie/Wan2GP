@@ -80,8 +80,8 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ---
 
 ## Immediate Next Actions
-- Port MatAnyOne to request `ProductionManager.metadata_state()` and forward the shared snapshot into `_save_outputs`, then delete the bespoke metadata config loader.
-- Document the new metadata_state contract in `docs/CLI.md` / `docs/APPENDIX_HEADLESS.md` and scrub for references to the removed `wgp.metadata_choice` / `metadata_configs`.
+- Inventory the remaining save-helper usage inside `wgp.generate_video` and outline the `core/io/media` interfaces required to absorb them.
+- Map `ProductionManager` prompt enhancer and LoRA prep dependencies so they can be injected without mutating module-level globals.
 
 ---
 
