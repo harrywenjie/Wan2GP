@@ -21,7 +21,11 @@ import numpy as np
 import torch
 from PIL import Image
 
-from core.io.media import build_metadata_config, write_metadata_bundle
+from core.io.media import (
+    MetadataSaveConfig,
+    build_metadata_config,
+    write_metadata_bundle,
+)
 from shared.utils import files_locator as fl
 from shared.utils.audio_video import (
     cleanup_temp_audio_files,
@@ -87,6 +91,7 @@ class MatAnyOneRequest:
     attach_audio: bool = True
     codec: str = "libx264_8"
     metadata_mode: str = "metadata"
+    metadata_configs: Optional[Dict[str, MetadataSaveConfig]] = None
     notifier: Optional[Callable[[str], None]] = None
 
     def __post_init__(self) -> None:
@@ -460,7 +465,11 @@ def _save_outputs(
     metadata["metadata_mode"] = request.metadata_mode
 
     metadata_mode = request.metadata_mode
-    metadata_config = build_metadata_config("video") if metadata_mode == "metadata" else None
+    metadata_config = (
+        build_metadata_config("video", templates=request.metadata_configs)
+        if metadata_mode == "metadata"
+        else None
+    )
     metadata_logger = media_logger if metadata_mode == "metadata" else None
 
     def _write_metadata(path: Path, payload: Dict[str, object]) -> None:

@@ -6,11 +6,13 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Dict, Iterable, Optional
 
 from cli.telemetry import configure_logging
 from shared.utils.notifications import configure_notifications
 from preprocessing.matanyone.app import MatAnyOneRequest, generate_masks
+from core.production_manager import ProductionManager
+from core.io.media import MetadataSaveConfig
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -127,6 +129,28 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _load_metadata_configs(logger) -> Optional[Dict[str, MetadataSaveConfig]]:
+    try:
+        import wgp  # type: ignore  # pylint: disable=import-error
+    except Exception as exc:  # pragma: no cover - import failure depends on environment
+        logger.debug("MatAnyOne metadata templates unavailable (import error): %s", exc)
+        return None
+
+    if hasattr(wgp, "ensure_runtime_initialized"):
+        try:
+            wgp.ensure_runtime_initialized()
+        except Exception as exc:  # pragma: no cover - runtime init is environment-specific
+            logger.debug("MatAnyOne metadata templates unavailable (runtime init): %s", exc)
+            return None
+
+    try:
+        manager = ProductionManager(wgp_module=wgp)
+        return manager.metadata_config_templates()
+    except Exception as exc:  # pragma: no cover - ProductionManager surface may evolve
+        logger.debug("MatAnyOne metadata templates unavailable (manager error): %s", exc)
+        return None
+
+
 def _resolve_path(path: Path, description: str) -> Path:
     resolved = path.expanduser()
     if not resolved.exists():
@@ -140,6 +164,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     args = parse_args(argv)
     logger = configure_logging(args.log_level)
     configure_notifications(logger)
+
+    metadata_configs = _load_metadata_configs(logger)
 
     try:
         request = MatAnyOneRequest(
@@ -158,6 +184,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             attach_audio=args.attach_audio,
             codec=args.codec,
             metadata_mode=args.metadata_mode,
+            metadata_configs=metadata_configs,
             notifier=logger.info,
         )
     except SystemExit:

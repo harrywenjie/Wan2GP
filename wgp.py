@@ -67,7 +67,7 @@ import gc
 import traceback
 import math 
 import typing
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 import inspect
 from shared.utils import prompt_parser
 import base64
@@ -113,6 +113,45 @@ def _resolve_metadata_config(
         extra_options["video"] = video_options
         config.extra_options = extra_options
     return config
+
+
+def _persist_metadata_payload(
+    path: str,
+    payload: Dict[str, Any],
+    *,
+    metadata_mode: str,
+    artifact_kind: str,
+    metadata_logger: Optional[Any] = None,
+    embedded_images: Optional[Dict[str, str]] = None,
+) -> None:
+    """
+    Persist metadata for a generated artifact using the selected mode.
+
+    Args:
+        path: Target artifact path.
+        payload: Metadata dictionary to persist.
+        metadata_mode: Either ``"metadata"`` (embed) or ``"json"`` (sidecar).
+        artifact_kind: Artifact type hint passed to the metadata resolver.
+        metadata_logger: Optional logger passed to embedded metadata handlers.
+        embedded_images: Optional map of source images for video embeddings.
+    """
+
+    if metadata_mode == "json":
+        json_path = Path(path).with_suffix(".json")
+        with open(json_path, "w", encoding="utf-8") as writer:
+            json.dump(payload, writer, indent=4)
+        return
+
+    if metadata_mode != "metadata":
+        return
+
+    config = _resolve_metadata_config(artifact_kind, embedded_images=embedded_images)
+    write_metadata_bundle(
+        path,
+        payload,
+        config=config,
+        logger=metadata_logger,
+    )
 import zipfile
 import atexit
 import shutil
@@ -2533,6 +2572,7 @@ def edit_video(
 
             if configs is not None:
                 metadata_mode = metadata_choice if metadata_choice is not None else server_config.get("metadata_type", "metadata")
+                configs["metadata_mode"] = metadata_mode
                 metadata_logger = get_notifications_logger() if metadata_mode == "metadata" else None
                 temp_images_path: Optional[str] = None
                 embedded_images = None
@@ -2541,18 +2581,14 @@ def edit_video(
 
                     temp_images_path = get_available_filename(save_path, video_source, force_extension=".temp")
                     embedded_images = extract_source_images(video_source, temp_images_path)
-                if metadata_mode == "json":
-                    json_path = Path(new_video_path).with_suffix(".json")
-                    with open(json_path, "w", encoding="utf-8") as writer:
-                        json.dump(configs, writer, indent=4)
-                elif metadata_mode == "metadata":
-                    metadata_config = _resolve_metadata_config("video", embedded_images=embedded_images)
-                    write_metadata_bundle(
-                        new_video_path,
-                        configs,
-                        config=metadata_config,
-                        logger=metadata_logger,
-                    )
+                _persist_metadata_payload(
+                    new_video_path,
+                    configs,
+                    metadata_mode=metadata_mode,
+                    artifact_kind="video",
+                    metadata_logger=metadata_logger,
+                    embedded_images=embedded_images,
+                )
                 if temp_images_path and os.path.isdir(temp_images_path):
                     shutil.rmtree(temp_images_path, ignore_errors=True)
             send_cmd("output")
@@ -3706,25 +3742,18 @@ def generate_video(
                 # if is_image: configs["is_image"] = True
                 metadata_mode = metadata_choice if metadata_choice is not None else server_config.get("metadata_type", "metadata")
                 video_path = [video_path] if not isinstance(video_path, list) else video_path
+                configs["metadata_mode"] = metadata_mode
                 metadata_logger = get_notifications_logger() if metadata_mode == "metadata" else None
                 for no, path in enumerate(video_path):
-                    if metadata_mode == "json":
-                        json_path = Path(path).with_suffix(".json")
-                        with open(json_path, "w", encoding="utf-8") as writer:
-                            json.dump(configs, writer, indent=4)
-                    elif metadata_mode == "metadata":
-                        if audio_only:
-                            config = _resolve_metadata_config("audio")
-                        elif is_image:
-                            config = _resolve_metadata_config("image")
-                        else:
-                            config = _resolve_metadata_config("video", embedded_images=embedded_images)
-                        write_metadata_bundle(
-                            path,
-                            configs,
-                            config=config,
-                            logger=metadata_logger,
-                        )
+                    artifact_kind = "audio" if audio_only else ("image" if is_image else "video")
+                    _persist_metadata_payload(
+                        path,
+                        configs,
+                        metadata_mode=metadata_mode,
+                        artifact_kind=artifact_kind,
+                        metadata_logger=metadata_logger,
+                        embedded_images=embedded_images if artifact_kind == "video" else None,
+                    )
                     if audio_only:
                         print(f"New audio file saved to Path: "+ path)
                     elif is_image:

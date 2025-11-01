@@ -80,9 +80,9 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ---
 
 ## Immediate Next Actions
-- Plumb `ProductionManager.metadata_config_templates()` into MatAnyOne runs so CLI callers reuse server-config metadata overrides instead of rebuilding defaults.
-- Audit the remaining metadata write paths (audio/image post-processing) to ensure JSON sidecars and embedded metadata share the new helper logic.
-- Outline the steps required to relocate `metadata_choice`/`metadata_configs` out of `wgp.py` and into `ProductionManager`, continuing the global-state reduction.
+- Add a `MetadataState` container to `ProductionManager` that snapshots `metadata_choice` plus cloned templates and expose it through a getter for non-`wgp` callers.
+- Teach `GenerationRuntime` / `wgp.generate_video()` to accept the explicit metadata state payload so runs no longer rely on module-level globals.
+- Delete `wgp.metadata_choice` / `metadata_configs` once the new state plumbing lands, collapsing `_resolve_metadata_config` to consume injected context and updating docs/tests.
 
 ---
 
