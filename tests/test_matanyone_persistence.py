@@ -183,3 +183,56 @@ class MatAnyOnePersistenceTests(TestCase):
         self.assertEqual(result.rgba_zip_path, expected_zip)
         mock_write_zip_file.assert_called_once_with(str(expected_zip), rgba_frames)
 
+    @mock.patch("preprocessing.matanyone.app.cleanup_temp_audio_files")
+    @mock.patch("preprocessing.matanyone.app.combine_video_with_audio_tracks")
+    def test_audio_tracks_use_context_and_cleanup_temp_video(
+        self,
+        mock_combine: mock.MagicMock,
+        mock_cleanup: mock.MagicMock,
+    ) -> None:
+        context = RecordingContext(container="mkv", codec="libx265", save_masks=True)
+        request = self._make_request(context=context, codec="libx265")
+
+        frames = [np.zeros((2, 2, 3), dtype=np.uint8) for _ in range(3)]
+        alpha_frames = [np.zeros((2, 2, 1), dtype=np.uint8) for _ in range(3)]
+        audio_tracks = ["/tmp/audio_track0.aac", "/tmp/audio_track1.aac"]
+        audio_metadata = [{"codec": "aac", "channels": 2}]
+
+        mock_combine.return_value = True
+        mock_cleanup.return_value = len(audio_tracks)
+
+        with mock.patch("pathlib.Path.exists", return_value=True), mock.patch("pathlib.Path.unlink") as mock_unlink:
+            result = _save_outputs(
+                request=request,
+                frames=frames,
+                alpha_frames=alpha_frames,
+                fps=24.0,
+                audio_tracks=audio_tracks,
+                audio_metadata=audio_metadata,
+                foreground_suffix="",
+                alpha_suffix="_alpha",
+                rgba_frames=None,
+            )
+
+        self.assertEqual(len(context.video_calls), 2, "foreground temp and alpha videos should be persisted")
+        temp_call, alpha_call = context.video_calls
+        self.assertIn("codec_type", temp_call["overrides"])
+        self.assertEqual(temp_call["overrides"]["codec_type"], "libx265")
+        self.assertIn("codec_type", alpha_call["overrides"])
+        self.assertEqual(alpha_call["overrides"]["codec_type"], "libx265")
+
+        mock_combine.assert_called_once()
+        mux_args, mux_kwargs = mock_combine.call_args
+        temp_path_arg, _, foreground_path_arg = mux_args[:3]
+        self.assertTrue(str(temp_path_arg).endswith("_tmp.mkv"), "Temp mux input should respect container suffix")
+        self.assertTrue(str(foreground_path_arg).endswith(".mkv"), "Foreground mux output should follow container override")
+        self.assertEqual(mux_kwargs.get("audio_metadata"), audio_metadata)
+
+        mock_cleanup.assert_called_once_with(audio_tracks)
+        mock_unlink.assert_called_once()
+
+        self.assertEqual(result.metadata["attach_audio"], True)
+        self.assertEqual(result.metadata["codec"], "libx265")
+        self.assertEqual(result.metadata["container"], "mkv")
+        self.assertEqual(result.foreground_path.suffix, ".mkv")
+        self.assertEqual(result.alpha_path.suffix, ".mkv")

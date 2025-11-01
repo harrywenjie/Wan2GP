@@ -14,3 +14,9 @@ Persistence surfaced as another pillar of the headless architecture. `core.io.me
 - Updated `PROJECT_PLAN_LIVE.md` to note completion of the MatAnyOne persistence coverage, add a follow-up task for audio mux testing, and keep `## Immediate Next Actions` focused.
 - Extended `docs/CONTEXT.md` to record the new persistence coverage guarantees and rebuilt `docs/WORK_HISTORY.md` per the handoff protocol.
 - Validation: `python -m unittest tests.test_matanyone_persistence` (pass).
+
+## 2025-11-01 (Session 3)
+- Defined the artifact manifest schema in `docs/CLI.md`, detailing the JSONL record structure (`run_id`, `metadata_mode`, artifact descriptors, and adapter payload hashes) and cross-linking it in `docs/CONTEXT.md` so follow-on work can implement the writer without re-litigating the format.
+- Replaced the first `## Immediate Next Actions` item with the concrete manifest writer implementation goal and introduced a new action to enforce `MediaPersistenceContext` coverage ahead of removing the legacy persistence wrappers. Added an audit note in `docs/CONTEXT.md` that outlines remaining wrapper call sites and a three-step deprecation plan.
+- Augmented `tests/test_matanyone_persistence.py` with `test_audio_tracks_use_context_and_cleanup_temp_video`, mocking the mux helpers to assert container propagation, audio cleanup, and temp-file removal whenever `audio_tracks` are injected.
+- Validation: `python -m unittest tests.test_matanyone_persistence` (pass).

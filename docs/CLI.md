@@ -98,6 +98,20 @@ Every path must reference an existing file; the CLI validates before execution.
 4. The command constructs a lightweight state object and forwards parameters into `wgp.generate_video`.
 5. Progress, status, and output notifications are logged to the terminal. The final output path is echoed on success.
 
+### Artifact Manifest Specification
+`cli.generate` writes a structured manifest once a run completes so schedulers and audit scripts can consume results without scraping logs. Unless overridden with `--manifest-path`, each invocation appends a single JSON object to `<output_dir>/manifests/run_history.jsonl`. Each line is UTF-8 JSON with sorted keys and the following schema:
+
+- `run_id` – UUIDv4 assigned when the run starts.
+- `timestamp` – ISO-8601 timestamp (UTC) recorded at completion.
+- `output_dir` – absolute path resolved before generation begins.
+- `metadata_mode` – effective metadata mode (`metadata` or `json`) after CLI overrides are applied.
+- `adapter_payload_hashes` – dictionary mapping adapter names to `{ "sha256": "<hex>", "source_bytes": <int> }`. Hashes are computed from the canonical JSON serialisation (`json.dumps(payload, sort_keys=True, separators=(",", ":"))`) encoded as UTF-8. `source_bytes` records the byte length of that serialisation for quick diagnostics.
+- `artifacts` – list of objects describing every saved file. Each entry captures: `role` (`foreground`, `alpha`, `audio`, `mask_archive`, etc.), `path` (absolute string), `container` (file container/extension), `codec` (video or audio codec when known), `frames` (integer when applicable), `duration_s` (float, optional), and `metadata_sidecar` (path to JSON/embedded indicator, `null` when embedded metadata was written). Future writers may extend entries with additional keys; consumers must ignore unknown fields.
+- `inputs` – object capturing resolved CLI arguments that materially affect reproducibility (prompt text, seeds, frame counts, model identifiers, and any runtime overrides that were applied). This section mirrors what `tests/test_queue_prompt_payloads.py` asserts today so queue snapshots and manifest entries stay aligned.
+- `status` – `"success"` or `"error"`. Failures capture `error` (string message) and omit `artifacts`.
+
+The manifest writer must flush the JSON line only after persistence succeeds. Dry runs skip manifest emission entirely. MatAnyOne will reuse the same format once its pipeline emits manifests; its `artifacts` list uses `mask_foreground`, `mask_alpha`, and `rgba_archive` roles.
+
 ### Tips
 - Treat `--dry-run` as your first step for any new command to ensure paths and overrides resolve correctly.
 - Use dedicated output directories (`--output-dir`) when batching experiments so results are easy to compare.

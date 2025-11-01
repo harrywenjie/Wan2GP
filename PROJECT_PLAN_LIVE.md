@@ -50,15 +50,12 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ---
 
 ## Immediate Next Actions
-- Define a lightweight artifact manifest spec for CLI runs (JSONL or per-run summary) that captures saved paths, metadata mode, and adapter payload hashes.
-  - **Proposal (2025-11-04)**: Draft a minimal schema, prototype emission in dry-run mode, and socialise with operators before wiring into `cli.generate`.
-  - **Rationale**: Replaces ad-hoc logging with machine-readable manifests, improving reproducibility audits and integration with external schedulers.
-- Extend MatAnyOne persistence coverage to the audio reattachment path so container overrides remain stable when tracks are merged.
-  - **Proposal (2025-11-05)**: Mock the audio mux helpers and assert temp artifact cleanup plus container/codec propagation when `audio_tracks` are supplied.
-  - **Rationale**: Locks in the context-aware audio flow and prevents regressions when the queue runner changes mux orchestration.
-- Plan the removal of legacy `save_video`/`save_image` wrappers once all call sites use `MediaPersistenceContext`.
-  - **Proposal (2025-11-04)**: Audit remaining usages, enumerate blockers, and sketch a deprecation timeline so the wrappers can disappear when the runner extraction lands.
-  - **Rationale**: Eliminating the wrappers reduces duplication, making the context the single persistence surface and simplifying future refactors.
+- Prototype the artifact manifest writer in `cli.generate` using the JSONL schema defined in `docs/CLI.md`.
+  - **Proposal (2025-11-01)**: Implement a writer that streams manifest entries to `<output_dir>/manifests/run_history.jsonl`, hashing adapter payloads via canonical JSON, and gate emission so failures never write partial records.
+  - **Rationale**: Moves the new manifest spec from design to execution, enabling downstream automation to consume machine-readable run summaries.
+- Enforce `MediaPersistenceContext` coverage inside `wgp` persistence helpers so wrapper fallbacks become unnecessary.
+  - **Proposal (2025-11-01)**: Identify code paths/tests that still call `_save_video_artifact` or `_save_image_artifact` without a context, introduce lightweight fixtures for those entry points, and make the helpers raise early when the context is missing.
+  - **Rationale**: Forces remaining callers onto the unified persistence surface and clears the way for deleting the transitional wrappers.
 
 ---
 
