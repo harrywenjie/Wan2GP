@@ -1,4 +1,4 @@
-# Detailed Context
+# Live Context
 
 ## Orchestration & Queue
 
@@ -24,7 +24,7 @@
 - Artifact manifests will be emitted as JSONL (`manifests/run_history.jsonl` inside the resolved `output_dir`). Each entry records saved artifact paths, the effective metadata mode, a reproducibility snapshot of CLI inputs, and SHA-256 hashes of adapter payloads derived from their canonical JSON serialisations (see `docs/CLI.md` for the public schema). Writers flush entries only after persistence succeeds; dry runs skip emission.
 - `cli.generate` now wraps `ProductionManager.media_context()` with a `ManifestRecorder`, capturing every `MediaPersistenceContext.save_*` invocation before the JSONL writer emits a row. Adapter payload hashes are derived from canonical JSON, and failures log an `"error"` field while omitting artifacts so partially persisted runs never leak into downstream automation.
 
-### Persistence Surface Update (2025-11-03)
+### Persistence Surface Update (2025-11-02)
 
 - `wgp.save_video/save_image` have been removed. All persistence now flows through `MediaPersistenceContext` or directly into `core.io.media.write_*`, keeping a single code path for retries and logging.
 - MatAnyOne fallbacks now call `write_video` when a context is unavailable, preserving codec/container overrides without touching the legacy `shared.utils.audio_video` shims.

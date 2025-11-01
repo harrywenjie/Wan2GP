@@ -29,7 +29,7 @@ This guide captures the most common issues encountered while running `python -m 
 ## Reproducibility & Logging
 - Always record the full command line (including `--seed`) alongside the resulting artifact path.  
 - For deeper diagnostics, run with `--log-level DEBUG` to expose queue and progress callbacks.  
-- Store observations (timings, VRAM load, anomalies) under `# Work History` in `docs/WORK_HISTORY.md`.
+- Store observations (timings, VRAM load, anomalies) under `# Work History` in `SESSION_LOG.md`.
 
 ## When Things Still Fail
 - Compare your environment (Python, PyTorch, driver versions) against a known-good setup.  

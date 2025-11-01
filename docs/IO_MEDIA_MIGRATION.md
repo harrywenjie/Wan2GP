@@ -30,10 +30,10 @@ Relocate the media output helpers (`save_video`, `save_image`, and the associate
 
 ## Migration Steps
 1. **Introduce module and dataclasses** *(Done)* – `core/io/media.py` now owns the config dataclasses and implements `write_video`/`write_image` with the legacy preprocessing, retry, and codec handling plus logger hooks.
-2. **Implement compatibility shims** *(Done; retired 2025-11-03)* – transitional `shared.utils.audio_video.save_video/save_image` wrappers delegated to the core helpers while call sites migrated off the legacy surface.
+2. **Implement compatibility shims** *(Done; retired 2025-11-02)* – transitional `shared.utils.audio_video.save_video/save_image` wrappers delegated to the core helpers while call sites migrated off the legacy surface.
 3. **Migrate metadata writers** *(Done)* – `write_metadata_bundle` now dispatches to the legacy `save_*_metadata` helpers, `shared.utils.audio_video` delegates through logger-aware shims, and both `wgp` and MatAnyOne emit metadata via `MetadataSaveConfig`.
 4. **Retire legacy metadata helpers** *(Done)* – removed the `shared.utils.audio_video.save_image_metadata` shim and tightened imports so the bundler routes through the dedicated media modules.
-5. **Document the new surfaces** *(Done 2025-11-03)* – refreshed `docs/CLI.md`, `docs/APPENDIX_HEADLESS.md`, and this plan to describe the final CLI workflow and integration coverage.
+5. **Document the new surfaces** *(Done 2025-11-02)* – refreshed `docs/CLI.md`, `docs/APPENDIX_HEADLESS.md`, and this plan to describe the final CLI workflow and integration coverage.
 6. **Remove legacy shims** *(Done)* – deleted the `shared.utils.audio_video.save_*` adapters; lingering preprocessors must call `MediaPersistenceContext` or `core.io.media.write_*` directly.
 
 ## Dependency Map
@@ -61,4 +61,4 @@ Relocate the media output helpers (`save_video`, `save_image`, and the associate
 ## Validation
 - Extend smoke tests: run `python -m cli.generate --prompt "smoke test prompt" --dry-run` plus a low-res render to confirm output paths.
 - MatAnyOne regression: `python -m cli.matanyone --input sample.mp4 --template-mask mask.png --dry-run` and a short real run to confirm codec overrides.
-- Capture timings and VRAM usage in `docs/WORK_HISTORY.md` once the new helpers land.
+- Capture timings and VRAM usage in `SESSION_LOG.md` once the new helpers land.

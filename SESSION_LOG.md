@@ -1,4 +1,4 @@
-# Work History
+# Session Log
 
 ## Prior Summary
 Wan2GP has been reshaped into a headless, CLI-first system where every generation request flows through explicit queue orchestration and manifest logging. `cli.queue_controller` now owns scheduling, pause/resume, and control-port handling, while `cli.runner` and `cli.generate` provide structured logging, deterministic aborts, and a JSONL manifest that captures run inputs plus adapter hashes. `ProductionManager.run_generation()` sits at the execution choke point: it clones metadata templates, prepares adapter payloads (prompt enhancer, LoRA), and delegates to the remaining `wgp.generate_video` internals without mutating legacy globals. Adapter shims, queue snapshot propagation, and notifier wiring are all protected by targeted unit tests so automation can rely on the CLI without inheriting Gradio-era state.
@@ -11,3 +11,7 @@ MatAnyOne preprocessing now mirrors the generation pipeline. The headless CLI cl
 - Threaded MatAnyOne audio metadata into CLI logging and manifest assembly: `_persist_audio_artifacts` now normalises sample rates, computes durations from decoded buffers, and stores per-track metadata (including channels, language, and source codec) before writing JSON sidecars. `cli.matanyone` reuses a normalised metadata helper to log each audio artifact and passes the structured list into `build_matanyone_artifacts`, which enriches manifest rows with `sample_rate`, `duration_s`, `language`, and `channels`.
 - Updated test coverage to lock in the new behaviour: `tests/test_matanyone_persistence.py` verifies audio sidecars capture duration and language, `tests/test_matanyone_manifest.py` asserts manifest audio entries expose the expanded metadata, and `tests/test_matanyone_cli_integration.py` now checks both manifest fields and INFO-level audio logs. Ran `python -m unittest tests.test_matanyone_persistence`, `python -m unittest tests.test_matanyone_cli_integration`, and `python -m unittest tests.test_matanyone_manifest`.
 - Documented the updated manifest schema and CLI behaviour (`docs/CLI.md`, `docs/APPENDIX_HEADLESS.md`, `LIVE_CONTEXT.md`), refreshed `PROJECT_PLAN_LIVE.md` (added the completion note, adjusted validation guidance, and replaced the finished immediate next action with a queue-metadata follow-up), and rewrote this work history with the latest summary plus today’s entry.
+
+## 2025-11-02 (Session 10)
+- Added short descriptions to the `## Project Specific Docs` section in `PROJECT_PLAN_LIVE.md` so maintainers can see at a glance what each document covers.
+- No code or validation changes required for this housekeeping pass.
