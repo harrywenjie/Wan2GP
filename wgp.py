@@ -59,7 +59,15 @@ from shared.attention import get_attention_modes, get_supported_attention_modes
 from shared.utils.utils import truncate_for_filesystem, sanitize_file_name, process_images_multithread, get_default_workers
 from shared.utils.process_locks import acquire_GPU_ressources, get_gen_info, release_GPU_ressources, gen_lock
 from core.io import get_available_filename
-from core.io.media import MetadataSaveConfig, build_metadata_config, write_metadata_bundle
+from core.io.media import (
+    ImageSaveConfig,
+    MetadataSaveConfig,
+    VideoSaveConfig,
+    build_metadata_config,
+    write_image,
+    write_metadata_bundle,
+    write_video,
+)
 from huggingface_hub import hf_hub_download, snapshot_download
 from shared.utils import files_locator as fl 
 import torch
@@ -79,25 +87,57 @@ else:
     MetadataState = typing.Any  # type: ignore[misc]
 
 
-def save_video(*args, **kwargs):
+def save_video(*args, config: Optional[VideoSaveConfig] = None, **kwargs):
     """
     Wrapper around ``shared.utils.audio_video.save_video`` that ensures logging flows
     through the notifications logger configured by the CLI.
     """
 
-    if kwargs.get("logger") is None:
-        kwargs["logger"] = get_notifications_logger()
-    return _save_video(*args, **kwargs)
+    logger = kwargs.pop("logger", None) or get_notifications_logger()
+    tensor = kwargs.pop("tensor", None)
+    save_file = kwargs.pop("save_file", None)
+    remaining_args = list(args)
+
+    if tensor is None and remaining_args:
+        tensor = remaining_args.pop(0)
+    if save_file is None and remaining_args:
+        save_file = remaining_args.pop(0)
+
+    if config is not None:
+        return write_video(tensor, save_file, config=config, logger=logger)
+
+    if tensor is not None:
+        kwargs.setdefault("tensor", tensor)
+    if save_file is not None:
+        kwargs.setdefault("save_file", save_file)
+    kwargs["logger"] = logger
+    return _save_video(*remaining_args, **kwargs)
 
 
-def save_image(*args, **kwargs):
+def save_image(*args, config: Optional[ImageSaveConfig] = None, **kwargs):
     """
     Wrapper around ``shared.utils.audio_video.save_image`` with logger injection.
     """
 
-    if kwargs.get("logger") is None:
-        kwargs["logger"] = get_notifications_logger()
-    return _save_image(*args, **kwargs)
+    logger = kwargs.pop("logger", None) or get_notifications_logger()
+    tensor = kwargs.pop("tensor", None)
+    save_file = kwargs.pop("save_file", None)
+    remaining_args = list(args)
+
+    if tensor is None and remaining_args:
+        tensor = remaining_args.pop(0)
+    if save_file is None and remaining_args:
+        save_file = remaining_args.pop(0)
+
+    if config is not None:
+        return write_image(tensor, save_file, config=config, logger=logger)
+
+    if tensor is not None:
+        kwargs.setdefault("tensor", tensor)
+    if save_file is not None:
+        kwargs.setdefault("save_file", save_file)
+    kwargs["logger"] = logger
+    return _save_image(*remaining_args, **kwargs)
 
 
 def _resolve_metadata_config(
@@ -2527,9 +2567,15 @@ def edit_video(
 
     tmp_path = None
     any_change = False
-    if sample != None:
+    if sample is not None:
         video_path =get_available_filename(save_path, video_source, "_tmp") if any_mmaudio or has_already_audio else get_available_filename(save_path, video_source, "_post")  
-        save_video( tensor=sample[None], save_file=video_path, fps=output_fps, nrow=1, normalize=True, value_range=(-1, 1), codec_type= server_config.get("video_output_codec", None), container=server_config.get("video_container", "mp4"))
+        video_config = resolve_video_config(
+            fps=output_fps,
+            nrow=1,
+            normalize=True,
+            value_range=(-1, 1),
+        )
+        save_video(tensor=sample[None], save_file=video_path, config=video_config)
 
         if any_mmaudio or has_already_audio: tmp_path = video_path
         any_change = True
@@ -2820,6 +2866,48 @@ def generate_video(
         else:
             metadata_mode_override = getattr(metadata_state, "choice", None)
     default_metadata_mode = server_config.get("metadata_type", "metadata")
+
+    def resolve_video_config(**overrides: Any) -> VideoSaveConfig:
+        context = media_context
+        if context is not None and hasattr(context, "video_config"):
+            try:
+                return context.video_config(**overrides)
+            except AttributeError:
+                pass
+        config = VideoSaveConfig(
+            codec_type=server_config.get("video_output_codec"),
+            container=server_config.get("video_container", "mp4"),
+        )
+        for key, value in overrides.items():
+            setattr(config, key, value)
+        return config
+
+    def resolve_image_config(**overrides: Any) -> ImageSaveConfig:
+        context = media_context
+        if context is not None and hasattr(context, "image_config"):
+            try:
+                return context.image_config(**overrides)
+            except AttributeError:
+                pass
+        config = ImageSaveConfig(
+            quality=server_config.get("image_output_codec"),
+        )
+        for key, value in overrides.items():
+            setattr(config, key, value)
+        return config
+
+    def should_save_debug_masks() -> bool:
+        context = media_context
+        if context is not None and hasattr(context, "should_save_masks"):
+            try:
+                return bool(context.should_save_masks())
+            except AttributeError:
+                pass
+        args_obj = globals().get("args")
+        if args_obj is not None and getattr(args_obj, "save_masks", False):
+            return True
+        return bool(server_config.get("save_masks", False))
+
     torch.set_grad_enabled(False) 
     if mode.startswith("edit_"):
         edit_video(send_cmd, state, mode, video_source, seed, temporal_upsampling, spatial_upsampling, film_grain_intensity, film_grain_saturation, MMAudio_setting, MMAudio_prompt, MMAudio_neg_prompt, repeat_generation, audio_source)
@@ -3392,13 +3480,19 @@ def generate_video(
                     else:
                         src_faces = src_faces[:, :src_video.shape[1]]
                 if video_guide is not None or len(frames_to_inject_parsed) > 0:
-                    if args.save_masks:
-                        if src_video is not None: 
-                            save_video( src_video, "masked_frames.mp4", fps)
-                            if any_mask: save_video( src_mask, "masks.mp4", fps, value_range=(0, 1))
-                        if src_video2 is not None: 
-                            save_video( src_video2, "masked_frames2.mp4", fps)
-                            if any_mask: save_video( src_mask2, "masks2.mp4", fps, value_range=(0, 1))
+                    if should_save_debug_masks():
+                        if src_video is not None:
+                            debug_video_config = resolve_video_config(fps=fps)
+                            save_video(src_video, "masked_frames.mp4", config=debug_video_config)
+                            if any_mask:
+                                debug_mask_config = resolve_video_config(fps=fps, value_range=(0, 1))
+                                save_video(src_mask, "masks.mp4", config=debug_mask_config)
+                        if src_video2 is not None:
+                            debug_video_config = resolve_video_config(fps=fps)
+                            save_video(src_video2, "masked_frames2.mp4", config=debug_video_config)
+                            if any_mask:
+                                debug_mask_config = resolve_video_config(fps=fps, value_range=(0, 1))
+                                save_video(src_mask2, "masks2.mp4", config=debug_mask_config)
                 if video_guide is not None:                        
                     preview_frame_no = 0 if extract_guide_from_window_start or model_def.get("dont_cat_preguide", False) or sparse_video_image is not None else (guide_start_frame - window_start_frame) 
                     preview_frame_no = min(src_video.shape[1] -1, preview_frame_no)
@@ -3676,13 +3770,14 @@ def generate_video(
 
                 time_flag = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d-%Hh%Mm%Ss")
                 save_prompt = original_prompts[0]
+                base_container = None
                 if audio_only:
                     extension = "wav"
                 elif is_image:
                     extension = "jpg"
                 else:
-                    container = server_config.get("video_container", "mp4")
-                    extension = container 
+                    base_container = resolve_video_config().container or "mp4"
+                    extension = base_container 
 
                 file_name = f"{time_flag}_seed{seed}_{sanitize_file_name(truncate_for_filesystem(save_prompt)).strip()}.{extension}"
                 video_path = os.path.join(save_path, file_name)
@@ -3691,6 +3786,9 @@ def generate_video(
                     from models.wan.alpha.utils import write_zip_file
                     write_zip_file(os.path.splitext(video_path)[0] + ".zip", BGRA_frames)
                     BGRA_frames = None 
+                video_config_for_outputs: Optional[VideoSaveConfig] = None
+                image_config_for_outputs: Optional[ImageSaveConfig] = None
+
                 if audio_only:
                     import soundfile as sf
                     audio_path = os.path.join(image_save_path, file_name)
@@ -3700,15 +3798,29 @@ def generate_video(
                     image_path = os.path.join(image_save_path, file_name)
                     sample =  sample.transpose(1,0)  #c f h w -> f c h w 
                     new_image_path = []
+                    image_config = resolve_image_config()
+                    image_config_for_outputs = image_config
                     for no, img in enumerate(sample):  
                         img_path = os.path.splitext(image_path)[0] + ("" if no==0 else f"_{no}") + ".jpg" 
-                        new_image_path.append(save_image(img, save_file = img_path, quality = server_config.get("image_output_codec", None)))
+                        new_image_path.append(save_image(img, save_file=img_path, config=image_config))
 
                     video_path= new_image_path
                 elif len(control_audio_tracks) > 0 or len(source_audio_tracks) > 0 or output_new_audio_filepath is not None or any_mmaudio or output_new_audio_data is not None or audio_source is not None:
                     video_path = os.path.join(save_path, file_name)
+                    video_config = resolve_video_config(
+                        fps=output_fps,
+                        nrow=1,
+                        normalize=True,
+                        value_range=(-1, 1),
+                    )
+                    video_config_for_outputs = video_config
+                    container = video_config.container or base_container or "mp4"
                     save_path_tmp = video_path.rsplit('.', 1)[0] + f"_tmp.{container}"
-                    save_video( tensor=sample[None], save_file=save_path_tmp, fps=output_fps, nrow=1, normalize=True, value_range=(-1, 1), codec_type = server_config.get("video_output_codec", None), container=container)
+                    save_video(
+                        tensor=sample[None],
+                        save_file=save_path_tmp,
+                        config=video_config,
+                    )
                     output_new_audio_temp_filepath = None
                     new_audio_added_from_audio_start =  reset_control_aligment or generated_audio is not None # if not beginning of audio will be skipped
                     source_audio_duration = source_video_frames_count / fps
@@ -3735,7 +3847,19 @@ def generate_video(
                     if output_new_audio_temp_filepath is not None: os.remove(output_new_audio_temp_filepath)
 
                 else:
-                    save_video( tensor=sample[None], save_file=video_path, fps=output_fps, nrow=1, normalize=True, value_range=(-1, 1),  codec_type= server_config.get("video_output_codec", None), container= container)
+                    video_config = resolve_video_config(
+                        fps=output_fps,
+                        nrow=1,
+                        normalize=True,
+                        value_range=(-1, 1),
+                    )
+                    video_config_for_outputs = video_config
+                    container = video_config.container or base_container or "mp4"
+                    save_video(
+                        tensor=sample[None],
+                        save_file=video_path,
+                        config=video_config,
+                    )
 
                 end_time = time.time()
 
@@ -3748,9 +3872,15 @@ def generate_video(
                 inputs["model_type"] = model_type
                 inputs["model_filename"] = original_filename
                 if is_image:
-                    inputs["image_quality"] = server_config.get("image_output_codec", None)
+                    if image_config_for_outputs is None:
+                        inputs["image_quality"] = resolve_image_config().quality
+                    else:
+                        inputs["image_quality"] = image_config_for_outputs.quality
                 else:
-                    inputs["video_quality"] = server_config.get("video_output_codec", None)
+                    if video_config_for_outputs is None:
+                        inputs["video_quality"] = resolve_video_config().codec_type
+                    else:
+                        inputs["video_quality"] = video_config_for_outputs.codec_type
 
                 modules = get_model_recursive_prop(model_type, "modules", return_list= True)
                 if len(modules) > 0 : inputs["modules"] = modules
