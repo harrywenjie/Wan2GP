@@ -9,7 +9,9 @@ from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 from core.task_inputs import TaskInputManager
 from shared.notifications import GenerationNotifier
 from core.io.media import (
+    MediaPersistenceContext,
     MetadataSaveConfig,
+    build_media_context,
     clone_metadata_config,
     default_metadata_config_templates,
 )
@@ -52,6 +54,7 @@ class GenerationRuntime:
     notifier: Optional[GenerationNotifier] = None
     callback_builder: Optional[CallbackBuilder] = None
     metadata_state: Optional[MetadataState] = None
+    media_context: Optional[MediaPersistenceContext] = None
 
     def build_task(self, params: Dict[str, Any]) -> Dict[str, Any]:
         if self.task_stub is not None:
@@ -131,6 +134,7 @@ class GenerationRuntime:
                 notifier=self.notifier,
                 callback_builder=self.callback_builder,
                 metadata_state=self.metadata_state,
+                media_context=self.media_context,
                 **params,
             )
         gen_state = self.state.get("gen", {}) or {}
@@ -312,6 +316,16 @@ class ProductionManager:
             for key, template in templates.items()
         }
 
+    def media_context(self) -> MediaPersistenceContext:
+        """
+        Build a media persistence context for the current ``server_config``.
+        """
+
+        server_config = getattr(self._wgp, "server_config", None)
+        if server_config is None:
+            raise RuntimeError("wgp module missing server_config; cannot build MediaPersistenceContext.")
+        return build_media_context(server_config)
+
     def metadata_state(
         self,
         *,
@@ -376,6 +390,7 @@ class ProductionManager:
             choice_override=metadata_choice_override,
             configs_override=metadata_configs_override,
         )
+        media_context = self.media_context()
 
         runtime = GenerationRuntime(
             wgp=self._wgp,
@@ -390,6 +405,7 @@ class ProductionManager:
             notifier=resolved_notifier,
             callback_builder=resolved_callback_builder,
             metadata_state=metadata_state,
+            media_context=media_context,
         )
         try:
             return runtime.run(params, send_cmd)

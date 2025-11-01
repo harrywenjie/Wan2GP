@@ -2797,6 +2797,7 @@ def generate_video(
     notifier=None,
     callback_builder=None,
     metadata_state=None,
+    media_context=None,
 ):
 
 
@@ -3743,6 +3744,7 @@ def generate_video(
                 inputs.pop("task")
                 inputs.pop("mode")
                 inputs.pop("metadata_state", None)
+                inputs.pop("media_context", None)
                 inputs["model_type"] = model_type
                 inputs["model_filename"] = original_filename
                 if is_image:

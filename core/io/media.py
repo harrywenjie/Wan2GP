@@ -6,7 +6,7 @@ import secrets
 import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple, Union
 
 import imageio
 import torch
@@ -77,6 +77,80 @@ class MetadataSaveConfig:
     format_hint: Optional[str] = None
     handlers: Dict[str, MetadataHandler] = field(default_factory=dict)
     extra_options: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+
+@dataclass
+class MediaPersistenceContext:
+    """
+    Bundle media persistence defaults for a generation run.
+
+    Callers clone the stored config templates through ``video_config`` /
+    ``image_config`` so each save operation receives an isolated dataclass
+    instance. ``save_debug_masks`` mirrors the legacy ``save_masks`` flag on
+    ``server_config`` and allows the runner to decide whether mask previews
+    should be persisted for inspection.
+    """
+
+    video_template: VideoSaveConfig
+    image_template: ImageSaveConfig
+    save_debug_masks: bool = False
+
+    def video_config(self, **overrides: Any) -> VideoSaveConfig:
+        """
+        Return a copy of the video template with optional field overrides.
+        """
+
+        config = replace(self.video_template)
+        config.extra_params = dict(self.video_template.extra_params)
+        if overrides:
+            fields = config.__dataclass_fields__
+            for key, value in overrides.items():
+                if key not in fields:
+                    raise AttributeError(f"VideoSaveConfig has no field named '{key}'")
+                setattr(config, key, value)
+        return config
+
+    def image_config(self, **overrides: Any) -> ImageSaveConfig:
+        """
+        Return a copy of the image template with optional field overrides.
+        """
+
+        config = replace(self.image_template)
+        config.extra_params = dict(self.image_template.extra_params)
+        if overrides:
+            fields = config.__dataclass_fields__
+            for key, value in overrides.items():
+                if key not in fields:
+                    raise AttributeError(f"ImageSaveConfig has no field named '{key}'")
+                setattr(config, key, value)
+        return config
+
+    def should_save_masks(self) -> bool:
+        """
+        Indicate whether debug mask artifacts should be persisted.
+        """
+
+        return self.save_debug_masks
+
+
+def build_media_context(server_config: Mapping[str, Any]) -> MediaPersistenceContext:
+    """
+    Construct a ``MediaPersistenceContext`` from the provided server configuration.
+    """
+
+    video_template = VideoSaveConfig(
+        codec_type=server_config.get("video_output_codec"),
+        container=server_config.get("video_container", "mp4"),
+    )
+    image_template = ImageSaveConfig(
+        quality=server_config.get("image_output_codec"),
+    )
+    save_debug_masks = bool(server_config.get("save_masks", False))
+    return MediaPersistenceContext(
+        video_template=video_template,
+        image_template=image_template,
+        save_debug_masks=save_debug_masks,
+    )
 
 
 def clone_metadata_config(
@@ -411,8 +485,10 @@ def _default_metadata_handlers() -> Dict[str, MetadataHandler]:
 
 __all__ = [
     "ImageSaveConfig",
+    "MediaPersistenceContext",
     "MetadataSaveConfig",
     "VideoSaveConfig",
+    "build_media_context",
     "write_image",
     "write_metadata_bundle",
     "write_video",

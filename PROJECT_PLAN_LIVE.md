@@ -97,8 +97,14 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ---
 
 ## Immediate Next Actions
-- Draft a `MediaPersistenceContext` (video/image config builders plus debug-mask policy) in `core/io/media`, then sketch how `ProductionManager` will hand it to `wgp.generate_video`.
+- Replace the direct `server_config` lookups in `wgp.generate_video` with the run-scoped `MediaPersistenceContext`.
+  - Proposal: thread the context handed in by `GenerationRuntime` through the video/image save paths, using `media_context.video_config(...)` / `media_context.image_config(...)` to assemble persistence settings and pivot debug-mask persistence to `media_context.should_save_masks()`.
+  - Rationale: exercises the new context so codecs/containers/quality options stay centralised, minimises future override plumbing, and isolates the legacy module from `server_config` mutations.
+  - Implementation sketch: update the `save_video` / `save_image` call sites to accept config objects (or kwargs derived from them) behind a thin compatibility layer, ensure temporary MMAudio flows still receive container overrides, and keep logging unchanged while context adoption is rolled out incrementally.
 - Design prompt-enhancer and LoRA injection hooks for `ProductionManager` (loader interfaces, state caching, TaskInputManager touchpoints) ahead of the runtime refactor.
+  - Proposal: split the prep work into two adapters under `core/`—a `LoRAInjectionManager` that wraps `setup_loras`, preset extraction, and multiplier resolution, plus a `PromptEnhancerBridge` that encapsulates enhancer provider setup / reset / processing. `ProductionManager` will vend cached instances tied to the current `server_config` so CLI callers stop reaching into `wgp`.
+  - Rationale: reduces redundant module imports in the CLI, lets queue/worker flows share cached enhancer + LoRA metadata, and clears a path to delete the remaining `wgp` helpers once the adapters own all interactions.
+  - Implementation sketch: introduce pure-Python interfaces in `core/lora/` and `core/prompt_enhancer/`, teach `TaskInputManager` to request them via `ProductionManager`, and update `cli.generate` to depend solely on the adapters while `wgp` keeps a temporary fallback shim for legacy callers.
 
 ---
 
