@@ -295,6 +295,9 @@ task_id = 0
 unique_id = 0
 unique_id_lock = threading.Lock()
 offloadobj = enhancer_offloadobj = wan_model = None
+prompt_enhancer_pipe = None
+prompt_enhancer_kwargs = None
+prompt_enhancer_primer = None
 reload_needed = True
 _task_inputs_manager: TaskInputManager | None = None
 
@@ -317,8 +320,11 @@ def clear_gen_cache():
         del offload.shared_state["_cache"]
 
 def release_model():
-    global wan_model, offloadobj, reload_needed
-    wan_model = None    
+    global wan_model, offloadobj, reload_needed, prompt_enhancer_pipe, prompt_enhancer_kwargs
+    wan_model = None
+    prompt_enhancer_pipe = None
+    prompt_enhancer_kwargs = None
+    reset_prompt_enhancer()
     clear_gen_cache()
     offload.shared_state
     if offloadobj is not None:
@@ -1598,8 +1604,10 @@ offload.default_verboseLevel = verbose_level
 
 
 
-def check_loras_exist(model_type, loras_choices_files, download = False, send_cmd = None):
-    lora_dir = get_lora_dir(model_type)
+def check_loras_exist(model_type, loras_choices_files, download = False, send_cmd = None, lora_dir_override = None):
+    lora_dir = lora_dir_override or get_lora_dir(model_type)
+    if lora_dir is None:
+        return "LoRA directory is not configured."
     manager = _get_task_inputs_manager()
     cache = manager.get_loras_url_cache()
     missing_local_loras = []
@@ -1746,7 +1754,7 @@ def reset_prompt_enhancer():
 
 def setup_prompt_enhancer(pipe, kwargs):
     global prompt_enhancer_image_caption_model, prompt_enhancer_image_caption_processor, prompt_enhancer_llm_model, prompt_enhancer_llm_tokenizer
-    model_no = server_config.get("enhancer_enabled", 0) 
+    model_no = server_config.get("enhancer_enabled", 0)
     if model_no != 0:
         from transformers import ( AutoModelForCausalLM, AutoProcessor, AutoTokenizer, LlamaForCausalLM )
         prompt_enhancer_image_caption_model = AutoModelForCausalLM.from_pretrained(fl.locate_folder("Florence2"), trust_remote_code=True)
@@ -1779,8 +1787,13 @@ def setup_prompt_enhancer(pipe, kwargs):
 
 
 
+def get_prompt_enhancer_runtime_handles():
+    return prompt_enhancer_pipe, prompt_enhancer_kwargs
+
+
+
 def load_models(model_type, override_profile = -1):
-    global transformer_type, loaded_profile
+    global transformer_type, loaded_profile, prompt_enhancer_pipe, prompt_enhancer_kwargs
     base_model_type = get_base_model_type(model_type)
     model_def = get_model_def(model_type)
     save_quantized = args.save_quantized and model_def != None
@@ -1872,8 +1885,14 @@ def load_models(model_type, override_profile = -1):
     if "coTenantsMap" not in kwargs: kwargs["coTenantsMap"] = {}
 
     profile = init_pipe(pipe, kwargs, override_profile)
-    if server_config.get("enhancer_mode", 0) == 0:
-        setup_prompt_enhancer(pipe, kwargs)
+    prompt_enhancer_pipe = pipe
+    prompt_enhancer_kwargs = kwargs
+    primer = globals().get("prompt_enhancer_primer")
+    if callable(primer):
+        try:
+            primer(pipe, kwargs)
+        except Exception:
+            pass
     loras_transformer = []
     if "transformer" in pipe:
         loras_transformer += ["transformer"]        
@@ -2844,6 +2863,7 @@ def generate_video(
     callback_builder=None,
     metadata_state=None,
     media_context=None,
+    adapter_payloads=None,
 ):
 
 
@@ -2997,7 +3017,29 @@ def generate_video(
 
     prompts = prompt.split("\n")
     prompts = [part for part in prompts if len(prompt)>0]
-    parsed_keep_frames_video_source= max_source_video_frames if len(keep_frames_video_source) ==0 else int(keep_frames_video_source) 
+    parsed_keep_frames_video_source= max_source_video_frames if len(keep_frames_video_source) ==0 else int(keep_frames_video_source)
+    lora_payload = {}
+    if isinstance(adapter_payloads, dict):
+        raw_lora_payload = adapter_payloads.get("lora")
+        if isinstance(raw_lora_payload, dict):
+            lora_payload = raw_lora_payload
+    payload_available_loras = list(lora_payload.get("available", []) or [])
+    payload_activated_loras = list(lora_payload.get("activated", []) or [])
+    payload_multipliers = lora_payload.get("multipliers")
+    payload_lora_dir = lora_payload.get("lora_dir")
+    if not activated_loras:
+        activated_loras = payload_activated_loras
+    activated_loras = list(activated_loras or [])
+    if loras_multipliers is None and payload_multipliers is not None:
+        loras_multipliers = payload_multipliers
+    elif loras_multipliers is not None:
+        loras_multipliers = str(loras_multipliers)
+    state_loras = []
+    if isinstance(state, dict):
+        maybe_state_loras = state.get("loras")
+        if isinstance(maybe_state_loras, (list, tuple)):
+            state_loras = list(maybe_state_loras)
+    available_loras = payload_available_loras or state_loras
     transformer_loras_filenames, transformer_loras_multipliers  = get_transformer_loras(model_type)
     if guidance_phases < 1: guidance_phases = 1
     if transformer_loras_filenames != None:
@@ -3011,12 +3053,14 @@ def generate_video(
         if len(errors) > 0: raise Exception(f"Error parsing Extra Transformer Loras: {errors}")
         loras_selected += extra_loras_transformers 
 
-    loras = state["loras"]
-    if len(loras) > 0:
-        loras_list_mult_choices_nums, loras_slists, errors =  parse_loras_multipliers(loras_multipliers, len(activated_loras), num_inference_steps, nb_phases = guidance_phases, merge_slist= loras_slists )
+    if len(available_loras) > 0:
+        effective_multipliers = loras_multipliers if loras_multipliers is not None else ""
+        loras_list_mult_choices_nums, loras_slists, errors =  parse_loras_multipliers(effective_multipliers, len(activated_loras), num_inference_steps, nb_phases = guidance_phases, merge_slist= loras_slists )
         if len(errors) > 0: raise Exception(f"Error parsing Loras: {errors}")
-        lora_dir = get_lora_dir(model_type)
-        errors = check_loras_exist(model_type, activated_loras, True, send_cmd)
+        lora_dir = payload_lora_dir or get_lora_dir(model_type)
+        if lora_dir is None:
+            raise GenerationError("Unable to resolve a LoRA directory for the requested selections.")
+        errors = check_loras_exist(model_type, activated_loras, True, send_cmd, lora_dir_override=lora_dir)
         if len(errors) > 0 : raise GenerationError(errors)
         loras_selected += [ os.path.join(lora_dir, os.path.basename(lora)) for lora in activated_loras]
 

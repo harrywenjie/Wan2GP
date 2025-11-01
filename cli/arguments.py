@@ -194,6 +194,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the resolved configuration without starting generation.",
     )
     parser.add_argument(
+        "--reset-lora-cache",
+        action="store_true",
+        help="Clear cached LoRA discovery before the run begins.",
+    )
+    parser.add_argument(
+        "--reset-prompt-enhancer",
+        action="store_true",
+        help="Reset the prompt enhancer bridge before priming for this run.",
+    )
+    parser.add_argument(
         "--control-port",
         type=int,
         default=None,

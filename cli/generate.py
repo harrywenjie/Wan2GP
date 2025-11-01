@@ -722,6 +722,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         wgp.transformer_dtype_policy,
     )
     bootstrap_manager = ProductionManager(wgp_module=wgp)
+    if args.reset_lora_cache:
+        logger.info("Resetting LoRA adapter cache before discovery.")
+        bootstrap_manager.lora_manager().reset()
+    if args.reset_prompt_enhancer:
+        logger.info("Resetting prompt enhancer bridge before generation.")
+        bootstrap_manager.prompt_enhancer().reset()
     lora_manager = bootstrap_manager.lora_manager()
     preselected_for_discovery = "" if args.lora_preset else None
     if args.lora_preset:
@@ -768,6 +774,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     runtime_summary["prompt_enhancer"] = params.get("prompt_enhancer")
     runtime_summary["override_profile"] = params.get("override_profile")
+    runtime_summary["reset_lora_cache"] = bool(args.reset_lora_cache)
+    runtime_summary["reset_prompt_enhancer"] = bool(args.reset_prompt_enhancer)
     if params.get("skip_steps_cache_type") == "tea":
         runtime_summary["tea_cache_level"] = params.get("skip_steps_multiplier")
         runtime_summary["tea_cache_start_perc"] = params.get("skip_steps_start_step_perc")

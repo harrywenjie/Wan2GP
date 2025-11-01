@@ -39,11 +39,12 @@
   - `build_lora_payload` and `resolve_prompt_enhancer` capture deterministic adapter snapshots for metadata, queue entries, and runtime execution.
 - **State management**
   - LoRA discovery is cached in-memory only; `snapshot_state()` exposes counts for debug flags, while `reset()` clears caches for future CLI hooks. Adapter payloads flow through queue metadata so workers never touch `wgp.update_loras_url_cache`.
-  - Prompt enhancer priming is tracked per server hash; `reset()` releases models via the legacy helper until the runtime extraction lands.
+  - Prompt enhancer priming is tracked per server hash; `reset()` releases the cached models, and the bridge installs a primer callback so `wgp.load_models` primes the enhancer before `offload.profile` runs.
 - **Implementation phases**
   1. (done) Adapter shims plus smoke tests landed (`tests/test_lora_manager.py`, `tests/test_prompt_enhancer_bridge.py`).
   2. (done) `ProductionManager`, `TaskInputManager`, and the CLI now depend on the adapters; `wgp` remains the execution backend for activation.
-  3. (in progress) Queue metadata + runtime execution now rely on adapter payloads; next step is deleting the remaining fallback helpers (`setup_loras`, `setup_prompt_enhancer`) once the adapters assume activation duties.
+  3. (done) Runtime execution now consumes adapter payloads inside `wgp.generate_video`, eliminating the `state["loras"]` mutation and routing prompt enhancer priming through the bridge primer instead of direct `setup_prompt_enhancer` calls.
+  4. (planned) Replace the remaining persistence helpers and inline enhancer utilities in `wgp` so the CLI runner can assume full control without touching legacy globals.
 
 ## ProductionManager Dependency Snapshot
 

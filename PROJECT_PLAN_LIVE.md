@@ -48,9 +48,9 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ---
 
 ## Immediate Next Actions
-- Refactor `wgp.generate_video` to consume the queued adapter payloads for LoRA activation, replacing direct directory lookups and `state["loras"]` mutations so the legacy helpers can be deleted.
-- Prime the prompt enhancer through `PromptEnhancerBridge` (adapter payload + spec plumbing) and retire the remaining `setup_prompt_enhancer` calls inside `wgp`.
-- Expose CLI toggles to reset LoRA and prompt enhancer caches ahead of a run, documenting the adapter lifecycle and wiring the resets through `ProductionManager`.
+- Replace the remaining video/image persistence calls inside `wgp.generate_video` with `MediaPersistenceContext` helpers supplied by `ProductionManager`.
+- Move prompt enhancer activation fully behind the bridge by routing `process_prompt_enhancer` callers through adapter payloads and retiring the legacy globals.
+- Add smoke coverage (CLI or queue harness) for the new adapter reset flags to guard cache-clearing regressions.
 
 ---
 

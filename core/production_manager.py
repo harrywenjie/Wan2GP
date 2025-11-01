@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 from core.lora.manager import LoRAInjectionManager
-from core.prompt_enhancer.bridge import PromptEnhancerBridge
+from core.prompt_enhancer.bridge import PromptEnhancerBridge, PromptEnhancerSpec
 from core.task_inputs import TaskInputManager
 from shared.notifications import GenerationNotifier
 from core.io.media import (
@@ -141,6 +141,7 @@ class GenerationRuntime:
                 callback_builder=self.callback_builder,
                 metadata_state=self.metadata_state,
                 media_context=self.media_context,
+                adapter_payloads=self.adapter_payloads,
                 **params,
             )
         gen_state = self.state.get("gen", {}) or {}
@@ -160,34 +161,52 @@ class GenerationRuntime:
                     manager.hydrate(model_type)
                 except Exception:  # pragma: no cover - defensive
                     pass
-            available = list(lora_payload.get("available", []))
-            presets = list(lora_payload.get("presets", []))
             activated = list(lora_payload.get("activated", []))
             multipliers = lora_payload.get("multipliers")
 
-            state = self.state
-            state["loras"] = available
-            state["loras_presets"] = presets
-
-            params["activated_loras"] = activated
-            if multipliers is not None:
+            if activated and not params.get("activated_loras"):
+                params["activated_loras"] = activated
+            if multipliers is not None and not params.get("loras_multipliers"):
                 params["loras_multipliers"] = multipliers
 
         bridge = self.prompt_enhancer
+        prompt_selection = params.get("prompt_enhancer")
+        force_prime = False
         if prompt_payload and isinstance(prompt_payload, dict):
             provider = prompt_payload.get("provider")
             enhancer_mode = prompt_payload.get("enhancer_mode")
+            force_prime = bool(prompt_payload.get("force", False))
             server_config = getattr(self.wgp, "server_config", None)
             if isinstance(server_config, dict):
                 if provider is not None:
                     server_config["enhancer_enabled"] = provider
                 if enhancer_mode is not None:
                     server_config["enhancer_mode"] = enhancer_mode
-        if bridge is not None and not params.get("prompt_enhancer"):
-            try:
-                bridge.reset()
-            except Exception:  # pragma: no cover - defensive
-                pass
+        if bridge is not None:
+            if prompt_selection:
+                get_handles = getattr(self.wgp, "get_prompt_enhancer_runtime_handles", None)
+                pipe = kwargs = None
+                if callable(get_handles):
+                    try:
+                        pipe, kwargs = get_handles()
+                    except Exception:  # pragma: no cover - defensive
+                        pipe = kwargs = None
+                if pipe is not None and kwargs is not None:
+                    spec = PromptEnhancerSpec(
+                        prompt_enhancer=prompt_selection,
+                        pipe=pipe,
+                        kwargs=kwargs,
+                        force=force_prime,
+                    )
+                    try:
+                        bridge.prime(spec)
+                    except Exception:  # pragma: no cover - defensive
+                        pass
+            else:
+                try:
+                    bridge.reset()
+                except Exception:  # pragma: no cover - defensive
+                    pass
 
 
 class ProductionManager:
@@ -311,7 +330,13 @@ class ProductionManager:
             while getattr(self._wgp, "wan_model", None) is None:
                 time.sleep(1)
 
-    def _ensure_model_ready(self, params: Dict[str, Any], send_cmd: SendCommand) -> None:
+    def _ensure_model_ready(
+        self,
+        params: Dict[str, Any],
+        send_cmd: SendCommand,
+        *,
+        adapter_payloads: Optional[Dict[str, Any]] = None,
+    ) -> None:
         model_type = params.get("model_type")
         if not model_type:
             return
@@ -334,13 +359,63 @@ class ProductionManager:
         if not needs_reload:
             return
 
+        prompt_payload = None
+        if isinstance(adapter_payloads, dict):
+            candidate = adapter_payloads.get("prompt_enhancer")
+            if isinstance(candidate, dict):
+                prompt_payload = candidate
+        prompt_selection = params.get("prompt_enhancer")
+
+        server_config = getattr(wgp, "server_config", None)
+        if isinstance(server_config, dict) and prompt_payload:
+            provider = prompt_payload.get("provider")
+            enhancer_mode = prompt_payload.get("enhancer_mode")
+            if provider is not None:
+                server_config["enhancer_enabled"] = provider
+            if enhancer_mode is not None:
+                server_config["enhancer_mode"] = enhancer_mode
+
+        bridge: Optional[PromptEnhancerBridge]
+        bridge = None
+        if prompt_selection or prompt_payload:
+            try:
+                bridge = self.prompt_enhancer()
+            except Exception:  # pragma: no cover - defensive
+                bridge = None
+
+        force_prime = bool(prompt_payload.get("force", False)) if prompt_payload else False
+        if bridge is not None:
+            if prompt_selection:
+                def _primer(pipe, kwargs, *, _bridge=bridge, _selection=prompt_selection, _force=force_prime):
+                    spec = PromptEnhancerSpec(
+                        prompt_enhancer=_selection,
+                        pipe=pipe,
+                        kwargs=kwargs,
+                        force=_force,
+                    )
+                    _bridge.prime(spec)
+
+                setattr(wgp, "prompt_enhancer_primer", _primer)
+            else:
+                setattr(wgp, "prompt_enhancer_primer", None)
+                try:
+                    bridge.reset()
+                except Exception:  # pragma: no cover - defensive
+                    pass
+        else:
+            setattr(wgp, "prompt_enhancer_primer", None)
+
         setattr(wgp, "wan_model", None)
         release_model = getattr(wgp, "release_model", None)
         if callable(release_model):
             release_model()
         if send_cmd is not None:
             send_cmd("status", f"Loading model {wgp.get_model_name(model_type)}...")
-        wan_model, offloadobj = wgp.load_models(model_type, override_profile)
+        try:
+            wan_model, offloadobj = wgp.load_models(model_type, override_profile)
+        finally:
+            if hasattr(wgp, "prompt_enhancer_primer"):
+                setattr(wgp, "prompt_enhancer_primer", None)
         setattr(wgp, "wan_model", wan_model)
         setattr(wgp, "offloadobj", offloadobj)
         if send_cmd is not None:
@@ -481,8 +556,6 @@ class ProductionManager:
         if resolved_notifier is not None:
             resolved_notifier.reset_progress(state)
 
-        self._ensure_model_ready(params, send_cmd)
-
         merged_attr_overrides = dict(attr_overrides or {})
         metadata_choice_override = merged_attr_overrides.pop("metadata_choice", None)
         metadata_configs_override = merged_attr_overrides.pop("metadata_configs", None)
@@ -492,6 +565,7 @@ class ProductionManager:
         )
         media_context = self.media_context()
         resolved_adapter_payloads = self._build_adapter_payloads(params, adapter_payloads)
+        self._ensure_model_ready(params, send_cmd, adapter_payloads=resolved_adapter_payloads)
         lora_manager = self.lora_manager()
         prompt_enhancer_bridge = self.prompt_enhancer()
 

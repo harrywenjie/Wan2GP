@@ -50,6 +50,7 @@ All actions should move the codebase toward minimalism, reproducibility, and det
 ## Documentation & Communication
 - Treat `PROJECT_PLAN_LIVE.md` as the authoritative session log; use `README.md` and `docs/*` (e.g. `docs/CLI.md`, `docs/APPENDIX_HEADLESS.md`) as the current headless CLI references and update them when workflows change.
 - Use Python chunked reads for files over 10240B to avoid CLI truncation.
+- When a timestamp is needed, use the `date` command to get the system time.
 - Record new insights or architectural notes in `docs/CONTEXT.md`, use `docs/WORK_HISTORY.md` for detailed session logs, and keep `PROJECT_PLAN_LIVE.md` focused on current objectives, roadmap, and task lists.
 - Follow `## Handoff Protocol` in `PROJECT_PLAN_LIVE.md`; ensure `## Immediate Next Actions` always lists the next concrete tasks before you stop.
 - Keep sensitive artifacts (weights, media, tokens) **out of version control**; document required paths and environment variables explicitly.
