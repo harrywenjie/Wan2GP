@@ -58,7 +58,7 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ## Handoff Protocol
 - Start each session by reviewing `docs/CONTEXT.md` for architectural notes and `docs/WORK_HISTORY.md` for the latest work, then consult this plan's `## Immediate Next Actions`.
 - Execute a coherent batch of related tasks from `## Immediate Next Actions` — enough for measurable progress but with a **focused** scope.
-- After completion, append a detailed entry to `docs/WORK_HISTORY.md` (covering code changes, modules touched, assets removed, and validation runs; omit trivial edits). 
+- After completion, replace the existing `docs/WORK_HISTORY.md` content with a concise (~800 token) summary of prior sessions, then append today’s detailed entry covering code changes.
 - Remove finished tasks from `## Immediate Next Actions`.
 - Add follow-up tasks or new task derived from the roadmap/objective to `## Immediate Next Actions` in proper order; 
 - Keep `## Immediate Next Actions` as a concise, timeless checklist.
