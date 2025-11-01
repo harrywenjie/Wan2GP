@@ -5,9 +5,8 @@
   - `## Objective`, this is high level directives serves as the project goal.
   - `## Project Roadmap`, this is the current project roadmap.
   - `## Validation Expectations`, this is the current validation instructions.
-  - `## Project Specific Live Docs`, this is the list of live docs specific to the current project.
+  - `## Project Specific Docs`, this is the list of docs specific to the current project.
   - `## Immediate Next Actions`, this is a concise list of current tasks.  
-- Use `README.md` and `docs/*` as references and update them as needed.
 - Always follow `## Handoff Protocol` below when carrying out tasks.
 - Ensure `## Immediate Next Actions` always lists the next concrete tasks before you stop.
 
@@ -17,6 +16,7 @@
 - At session start, read `PROJECT_PLAN_LIVE.md`:
   - Review `LIVE_CONTEXT.md` and `SESSION_LOG.md` for detailed context and recent work.
   - Review `## Immediate Next Actions` for current tasks.
+  - Review files listed under `## Project Specific Docs` for additional context as needed.
   - Explore relevant parts of the codebase to rebuild working context.
 - Refresh `## Date` in `PROJECT_PLAN_LIVE.md` via `date +"%Y-%m-%d"`; use it for session timestamps.
 
@@ -59,6 +59,6 @@
 - Keep `## Immediate Next Actions` as a concise, timeless checklist.
 - Audit and prune `## Project Roadmap`, cleaning up stale milestones.
 - Review `## Validation Expectations` and update as needed.
-- Update docs listed under `## Project Specific Live Docs` for changes if any.
+- Update any docs listed under `## Project Specific Docs` if changes occur.
 - Record new insights or architectural notes in `LIVE_CONTEXT.md`; prune stale entries.
 - Keep `PROJECT_PLAN_LIVE.md` clear, consistent, and easy for future agents to follow.

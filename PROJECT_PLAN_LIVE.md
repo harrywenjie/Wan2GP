@@ -63,10 +63,21 @@
 
 ---
 
-## Project Specific Live Docs
+## Project Specific Docs
 
+- `README.md` – Primary project overview. 
 - `docs/APPENDIX_HEADLESS.md` - Architectural appendix for the headless CLI migration, queue orchestration, and persistence references.
 - `docs/CLI.md` - CLI usage guide covering generation/preprocessing flags, runtime toggles, and the artifact manifest schema.
+- `docs/AMD-INSTALLATION.md` – ROCm/AMD provisioning notes for RDNA-class deployments.
+- `docs/CHANGELOG.md` – Headless-era changelog capturing milestone refactors and documentation updates.
+- `docs/FINETUNES.md` – Guidance for creating, validating, and distributing finetune JSON profiles.
+- `docs/GETTING_STARTED.md` – Quickstart walkthrough for running your first CLI generation and common adjustments.
+- `docs/INSTALLATION.md` – Platform-neutral setup guide for the headless Python workflow.
+- `docs/IO_MEDIA_MIGRATION.md` – Media persistence refactor plan tracking `core.io.media` progress.
+- `docs/LORAS.md` – LoRA asset organisation and activation notes for configuration-driven runs.
+- `docs/MODELS.md` – `--model-type` catalogue detailing hardware footprints and use cases.
+- `docs/TROUBLESHOOTING.md` – Headless CLI troubleshooting checklist with common error resolutions.
+- `docs/VACE.md` – Motion-transfer/VACE workflow reference covering required assets and CLI usage.
 
 ---
 
