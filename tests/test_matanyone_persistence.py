@@ -28,12 +28,13 @@ class RecordingContext(MediaPersistenceContext):
         super().__init__(
             video_template=VideoSaveConfig(codec_type=codec, container=container),
             image_template=ImageSaveConfig(),
-            audio_template=AudioSaveConfig(),
+            audio_template=AudioSaveConfig(sample_rate=16000, format="wav", subtype="PCM_16"),
             mask_template=MaskSaveConfig(),
             save_debug_masks=save_masks,
         )
         self.video_calls = []
         self.mask_calls = []
+        self.audio_calls = []
 
     @staticmethod
     def _ensure_suffix(path: str, container: str) -> str:
@@ -55,6 +56,27 @@ class RecordingContext(MediaPersistenceContext):
         }
         self.video_calls.append(record)
         return self._ensure_suffix(str(target_path), self.video_template.container)
+
+    def save_audio(
+        self,
+        data: Any,
+        target_path: str,
+        *,
+        sample_rate: Optional[int] = None,
+        logger=None,
+        config: Optional[AudioSaveConfig] = None,
+        overrides: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        record = {
+            "target_path": target_path,
+            "sample_rate": sample_rate,
+            "overrides": dict(overrides or {}),
+        }
+        self.audio_calls.append(record)
+        path_obj = Path(target_path)
+        path_obj.parent.mkdir(parents=True, exist_ok=True)
+        path_obj.write_bytes(b"audio")
+        return str(path_obj)
 
     def save_mask_archive(
         self,
@@ -183,12 +205,14 @@ class MatAnyOnePersistenceTests(TestCase):
         self.assertEqual(result.rgba_zip_path, expected_zip)
         mock_write_zip_file.assert_called_once_with(str(expected_zip), rgba_frames)
 
+    @mock.patch("preprocessing.matanyone.app._load_audio_samples")
     @mock.patch("preprocessing.matanyone.app.cleanup_temp_audio_files")
     @mock.patch("preprocessing.matanyone.app.combine_video_with_audio_tracks")
     def test_audio_tracks_use_context_and_cleanup_temp_video(
         self,
         mock_combine: mock.MagicMock,
         mock_cleanup: mock.MagicMock,
+        mock_load_samples: mock.MagicMock,
     ) -> None:
         context = RecordingContext(container="mkv", codec="libx265", save_masks=True)
         request = self._make_request(context=context, codec="libx265")
@@ -196,10 +220,17 @@ class MatAnyOnePersistenceTests(TestCase):
         frames = [np.zeros((2, 2, 3), dtype=np.uint8) for _ in range(3)]
         alpha_frames = [np.zeros((2, 2, 1), dtype=np.uint8) for _ in range(3)]
         audio_tracks = ["/tmp/audio_track0.aac", "/tmp/audio_track1.aac"]
-        audio_metadata = [{"codec": "aac", "channels": 2}]
+        audio_metadata = [
+            {"codec": "aac", "channels": 2, "sample_rate": 48000, "duration": 1.23, "language": "eng"},
+            {"codec": "aac", "channels": 1, "sample_rate": 44100, "duration": 1.23, "language": "fra"},
+        ]
 
         mock_combine.return_value = True
         mock_cleanup.return_value = len(audio_tracks)
+        mock_load_samples.side_effect = [
+            (np.zeros((4, 2), dtype=np.float32), 48000),
+            (np.zeros(4, dtype=np.float32), 44100),
+        ]
 
         with mock.patch("pathlib.Path.exists", return_value=True), mock.patch("pathlib.Path.unlink") as mock_unlink:
             result = _save_outputs(
@@ -231,8 +262,22 @@ class MatAnyOnePersistenceTests(TestCase):
         mock_cleanup.assert_called_once_with(audio_tracks)
         mock_unlink.assert_called_once()
 
+        self.assertEqual(len(context.audio_calls), 2, "Each audio track should be persisted through the context")
+        self.assertEqual(context.audio_calls[0]["sample_rate"], 48000)
+        self.assertEqual(context.audio_calls[1]["sample_rate"], 44100)
+
         self.assertEqual(result.metadata["attach_audio"], True)
         self.assertEqual(result.metadata["codec"], "libx265")
         self.assertEqual(result.metadata["container"], "mkv")
         self.assertEqual(result.foreground_path.suffix, ".mkv")
         self.assertEqual(result.alpha_path.suffix, ".mkv")
+        self.assertIn("audio_tracks", result.metadata)
+        self.assertEqual(result.metadata.get("audio_track_count"), 2)
+        audio_entries = result.metadata["audio_tracks"]
+        self.assertEqual(len(audio_entries), 2)
+        self.assertEqual(audio_entries[0]["sample_rate"], 48000)
+        self.assertEqual(audio_entries[0]["channels"], 2)
+        self.assertEqual(audio_entries[0]["language"], "eng")
+        self.assertTrue(Path(audio_entries[0]["path"]).with_suffix(".json").exists())
+        self.assertEqual(audio_entries[1]["sample_rate"], 44100)
+        self.assertEqual(audio_entries[1]["channels"], 1)

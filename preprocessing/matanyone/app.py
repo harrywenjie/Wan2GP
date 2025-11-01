@@ -14,9 +14,10 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import cv2
+import ffmpeg
 import numpy as np
 import torch
 from PIL import Image
@@ -508,6 +509,156 @@ def _save_mask_archive_artifact(
     return archive_path
 
 
+def _coerce_positive_int(value: object) -> Optional[int]:
+    try:
+        number = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _coerce_float(value: object) -> Optional[float]:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _load_audio_samples(
+    source_path: str,
+    *,
+    sample_rate: Optional[int],
+    channels: Optional[int],
+) -> Tuple[np.ndarray, Optional[int]]:
+    decode_args: Dict[str, object] = {"format": "f32le"}
+    resolved_channels = channels if channels and channels > 0 else None
+    resolved_rate = sample_rate if sample_rate and sample_rate > 0 else None
+    if resolved_channels is not None:
+        decode_args["ac"] = resolved_channels
+    if resolved_rate is not None:
+        decode_args["ar"] = resolved_rate
+
+    try:
+        stdout, _ = (
+            ffmpeg.input(source_path)
+            .output("pipe:", **decode_args)
+            .run(capture_stdout=True, capture_stderr=True)
+        )
+    except ffmpeg.Error as exc:  # pragma: no cover - dependent on runtime codec support
+        message = exc.stderr.decode("utf-8", errors="ignore") if exc.stderr else str(exc)
+        raise RuntimeError(f"Failed to decode audio track '{source_path}': {message}") from exc
+
+    if not stdout:
+        raise RuntimeError(f"Decoded zero bytes from audio track '{source_path}'.")
+
+    samples = np.frombuffer(stdout, dtype=np.float32)
+    channel_count = resolved_channels if resolved_channels is not None else 1
+    if channel_count > 1:
+        total_frames = samples.size // channel_count
+        if total_frames == 0:
+            raise RuntimeError(f"Decoded audio track '{source_path}' with zero frames.")
+        samples = samples[: total_frames * channel_count]
+        samples = samples.reshape(total_frames, channel_count)
+    return samples, resolved_rate
+
+
+def _resolve_audio_suffix(template: Any, fallback_suffix: str) -> str:
+    format_hint = getattr(template, "format", None)
+    if format_hint:
+        normalized = str(format_hint)
+        return normalized if normalized.startswith(".") else f".{normalized}"
+
+    if fallback_suffix:
+        normalized_fallback = fallback_suffix if fallback_suffix.startswith(".") else f".{fallback_suffix}"
+    else:
+        normalized_fallback = ""
+    supported_fallbacks = {".wav", ".flac", ".ogg", ".oga"}
+    if normalized_fallback.lower() in supported_fallbacks:
+        return normalized_fallback
+    return ".wav"
+
+
+def _persist_audio_artifacts(
+    request: MatAnyOneRequest,
+    *,
+    audio_tracks: Sequence[str],
+    audio_metadata: Optional[Sequence[Mapping[str, object]]],
+    prefix: str,
+    logger: logging.Logger,
+    metadata_writer: Callable[[Path, Dict[str, object]], None],
+) -> List[Dict[str, object]]:
+    context = request.media_context
+    if context is None or not audio_tracks:
+        return []
+
+    artifacts: List[Dict[str, object]] = []
+    for index, track in enumerate(audio_tracks):
+        template = context.audio_config()
+        track_meta: Mapping[str, object] = {}
+        if audio_metadata and index < len(audio_metadata):
+            track_meta = audio_metadata[index]
+
+        sample_rate = _coerce_positive_int(track_meta.get("sample_rate") if track_meta else None)
+        channels = _coerce_positive_int(track_meta.get("channels") if track_meta else None)
+        duration = _coerce_float(track_meta.get("duration") if track_meta else None)
+        language = track_meta.get("language") if track_meta else None
+        source_codec = track_meta.get("codec") if track_meta else None
+
+        decode_rate = sample_rate or getattr(template, "sample_rate", None)
+        try:
+            decoded, resolved_rate = _load_audio_samples(
+                track,
+                sample_rate=decode_rate,
+                channels=channels,
+            )
+        except Exception as exc:  # pragma: no cover - dependent on codec availability
+            if hasattr(logger, "warning"):
+                logger.warning("Skipping audio track %s due to decode failure: %s", track, exc)
+            continue
+
+        effective_rate = resolved_rate or sample_rate or getattr(template, "sample_rate", None)
+        if effective_rate is None:
+            if hasattr(logger, "warning"):
+                logger.warning("Skipping audio track %s: unable to determine sample rate.", track)
+            continue
+
+        base_name = f"{prefix}_audio_{index + 1}"
+        original_suffix = Path(track).suffix
+        suffix = _resolve_audio_suffix(template, original_suffix)
+        target_path = request.output_dir / f"{base_name}{suffix}"
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            persisted_path = context.save_audio(
+                decoded,
+                str(target_path),
+                sample_rate=effective_rate,
+                logger=logger,
+                config=template,
+            )
+        except Exception as exc:  # pragma: no cover - dependent on config/runtime support
+            if hasattr(logger, "warning"):
+                logger.warning("Failed to persist audio track %s: %s", target_path, exc)
+            continue
+
+        resolved_path = Path(persisted_path)
+        channel_count = decoded.shape[1] if decoded.ndim == 2 else 1
+        audio_entry = {
+            "path": str(resolved_path),
+            "sample_rate": effective_rate,
+            "channels": channel_count,
+            "duration": duration,
+            "language": language,
+            "source_codec": source_codec,
+            "format": getattr(template, "format", None),
+            "subtype": getattr(template, "subtype", None),
+        }
+        metadata_writer(resolved_path, audio_entry)
+        artifacts.append(audio_entry)
+
+    return artifacts
+
+
 def _save_outputs(
     request: MatAnyOneRequest,
     frames: List[np.ndarray],
@@ -522,6 +673,7 @@ def _save_outputs(
     request.output_dir.mkdir(parents=True, exist_ok=True)
 
     media_logger = get_notifications_logger()
+    metadata_mode = request.metadata_mode
     timestamp = datetime.now().strftime("%Y-%m-%d-%Hh%Mm%Ss")
     base_name = sanitize_file_name(request.input_path.stem) or "matanyone"
     base_name = truncate_for_filesystem(base_name)
@@ -535,7 +687,29 @@ def _save_outputs(
     foreground_base = request.output_dir / f"{prefix}{foreground_suffix}"
     alpha_base = request.output_dir / f"{prefix}{alpha_suffix}"
 
+    def _write_audio_metadata(path: Path, payload: Dict[str, object]) -> None:
+        if metadata_mode != "json":
+            return
+        sidecar_path = path.with_suffix(".json")
+        serialisable = dict(payload)
+        serialisable["path"] = str(path)
+        try:
+            with sidecar_path.open("w", encoding="utf-8") as writer:
+                json.dump(serialisable, writer, indent=4)
+        except Exception as exc:  # pragma: no cover - filesystem errors depend on environment
+            if hasattr(media_logger, "warning"):
+                media_logger.warning("Failed to write audio metadata sidecar %s: %s", sidecar_path, exc)
+
+    persisted_audio: List[Dict[str, object]] = []
     if audio_tracks:
+        persisted_audio = _persist_audio_artifacts(
+            request=request,
+            audio_tracks=audio_tracks,
+            audio_metadata=audio_metadata,
+            prefix=prefix,
+            logger=media_logger,
+            metadata_writer=_write_audio_metadata,
+        )
         temp_base = request.output_dir / f"{prefix}{foreground_suffix}_tmp"
         temp_video_path = _save_video_artifact(
             frames,
@@ -594,9 +768,11 @@ def _save_outputs(
         "new_dim": request.new_dim,
     }
 
-    metadata["metadata_mode"] = request.metadata_mode
+    metadata["metadata_mode"] = metadata_mode
+    if persisted_audio:
+        metadata["audio_tracks"] = persisted_audio
+        metadata["audio_track_count"] = len(persisted_audio)
 
-    metadata_mode = request.metadata_mode
     metadata_state = request.metadata_state
     metadata_config = None
     if metadata_mode == "metadata":

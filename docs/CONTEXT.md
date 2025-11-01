@@ -9,10 +9,10 @@
 
 ## MatAnyOne Pipeline
 
-- `preprocessing/matanyone/app.py` is a headless pipeline that assumes on-disk source media/masks and GPU availability.
+- `preprocessing/matanyone/app.py` is a headless pipeline that assumes on-disk source media/masks and GPU availability. `_persist_audio_artifacts` now decodes extracted AAC tracks via `ffmpeg` into float32 arrays, persists them through `MediaPersistenceContext.save_audio`, and records per-track metadata (sample rate, channels, language, source codec) back into `MatAnyOneResult.metadata["audio_tracks"]`. JSON sidecars are written for each persisted audio artifact when the request runs in `metadata_mode=json`.
 - `cli/matanyone.py` wraps the pipeline with logging, input validation, frame/mask/audio controls, optional dry-run mode, and forwards requests to `generate_masks` using the shared CLI notifier. When `wgp` is available the CLI clones both `ProductionManager.metadata_state()` and `media_context()` so MatAnyOne writes metadata with the same templates and persists media through the shared context. Outputs land under `mask_outputs/` with container/codec overrides pulled from `server_config`; RGBA ZIP bundles now respect the context `save_masks` toggle while audio tracks are reattached onto the resolved container when requested.
-- `tests/test_matanyone_persistence.py` guards the context-driven persistence flow by asserting video saves honour codec/container overrides and that mask archives follow the `save_masks` gating, with follow-up coverage planned for the audio mux path.
-- `tests/test_matanyone_cli_integration.py` exercises the CLI end-to-end, patching the heavy pipeline while asserting the manifest records `mask_foreground`, `mask_alpha`, and `rgba_archive` artifacts plus expected metadata sidecars.
+- `tests/test_matanyone_persistence.py` guards the context-driven persistence flow by asserting video saves honour codec/container overrides, audio artifacts persist through `MediaPersistenceContext.save_audio` with per-track sample rates/languages, and mask archives follow the `save_masks` gating.
+- `tests/test_matanyone_cli_integration.py` exercises the CLI end-to-end, patching the heavy pipeline while asserting the manifest records `mask_foreground`, `mask_alpha`, `rgba_archive`, and `audio` artifacts plus expected metadata sidecars.
 
 ## Metadata & IO
 
