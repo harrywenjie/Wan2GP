@@ -29,10 +29,11 @@ class _StubManager:
     mirroring the process_status semantics expected by the queue controller.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, audio_tracks: Optional[List[Dict[str, Any]]] = None) -> None:
         self.queue_tracker = QueueStateTracker()
         self.wgp = SimpleNamespace()
         self._task_inputs = _StubTaskInputs()
+        self._audio_tracks = [dict(track) for track in audio_tracks or []]
 
     def task_inputs(self) -> "_StubTaskInputs":
         return self._task_inputs
@@ -55,6 +56,9 @@ class _StubManager:
         adapter_payloads: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
         gen_state = state.setdefault("gen", {})
+        if self._audio_tracks:
+            with gen_lock:
+                gen_state["audio_tracks"] = [dict(track) for track in self._audio_tracks]
         gen_state["in_progress"] = True
         outputs = gen_state.setdefault("file_list", [])
         if not outputs:
@@ -100,8 +104,18 @@ def run_smoke() -> List[str]:
     controller honours the pause handshake and resumes cleanly.
     """
 
+    expected_audio_tracks: List[Dict[str, Any]] = [
+        {
+            "path": "audio/smoke-track.wav",
+            "sample_rate": 48000,
+            "duration_s": 2.75,
+            "language": "en",
+            "channels": 2,
+        }
+    ]
+
     state: Dict[str, Any] = {"gen": {"queue": []}}
-    manager = _StubManager()
+    manager = _StubManager(audio_tracks=expected_audio_tracks)
     controller = QueueController(manager=manager, state=state)
 
     events: List[str] = []
@@ -181,6 +195,21 @@ def run_smoke() -> List[str]:
         final_status = parse_status(send_command(host, port, "status"))
         if final_status.get("paused"):
             raise RuntimeError("QueueControlServer reported paused state after completion.")
+        audio_tracks = final_status.get("audio_tracks")
+        if audio_tracks != expected_audio_tracks:
+            raise RuntimeError(f"QueueControlServer audio_tracks mismatch: {audio_tracks}")
+        summary = final_status.get("queue_summary") or ""
+        if "Audio tracks:" not in summary:
+            raise RuntimeError("QueueControlServer queue summary missing audio track header.")
+        for snippet in (
+            "path=audio/smoke-track.wav",
+            "sample_rate=48000",
+            "duration=2.75s",
+            "language=en",
+            "channels=2",
+        ):
+            if snippet not in summary:
+                raise RuntimeError(f"QueueControlServer queue summary missing snippet: {snippet}")
     finally:
         server.stop()
 

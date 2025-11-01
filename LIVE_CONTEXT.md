@@ -6,6 +6,7 @@
 - `cli.queue_controller.QueueController` is the primary queue runner (AsyncStream-backed). It owns abort/pause handling, drains queued tasks sequentially, and surfaces pause/resume/status/abort over the optional TCP control server (`cli.queue_control_server` + `cli.queue_control`). `tests/test_queue_prompt_payloads.py` locks in the enhanced prompt payload propagation path so queue snapshots keep the metadata required by downstream automation.
 - Queue state lives under `cli.queue_state.QueueStateTracker`. Helper functions for queue summaries, abort/clear toggles, and counter resets live in `cli.queue_utils` / `cli.queue_state`, with `wgp.clear_queue_action` maintained only for legacy compatibility.
 - Queue tracking now normalises MatAnyOne audio metadata into `state["gen"]["audio_tracks"]`, exposing `path`, `sample_rate`, `duration_s`, `language`, and `channels` through both the textual queue summary and the TCP `status` payload. `tests/test_queue_audio_metadata.py` guards the normalisation and ensures metrics propagate the new field.
+- `cli.queue_controller_smoke` seeds representative audio metadata and asserts the TCP `status` payload plus the queue summary relay `audio_tracks` fields end-to-end, guarding the control channel coverage (2025-11-02).
 - `cli.runner` provides the CLI notifier (`CLIGenerationNotifier`), progress callback builder, and `send_cmd` bridge so telemetry updates stay in sync with `state["gen"]`. `cli.generate` traps `KeyboardInterrupt` and clears the queue via these helpers.
 
 ## MatAnyOne Pipeline
