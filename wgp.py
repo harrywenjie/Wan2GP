@@ -67,11 +67,16 @@ import gc
 import traceback
 import math 
 import typing
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
 import inspect
 from shared.utils import prompt_parser
 import base64
 from PIL import Image
+
+if TYPE_CHECKING:
+    from core.production_manager import MetadataState
+else:
+    MetadataState = typing.Any  # type: ignore[misc]
 
 
 def save_video(*args, **kwargs):
@@ -95,16 +100,20 @@ def save_image(*args, **kwargs):
     return _save_image(*args, **kwargs)
 
 
-metadata_configs: Dict[str, MetadataSaveConfig] = {}
-metadata_choice: Optional[str] = None
-
-
 def _resolve_metadata_config(
     kind: str,
     *,
+    metadata_state: Optional["MetadataState"] = None,
     embedded_images: Optional[Dict[str, str]] = None,
 ) -> MetadataSaveConfig:
-    configs = metadata_configs if isinstance(metadata_configs, dict) and metadata_configs else None
+    configs: Optional[Dict[str, MetadataSaveConfig]] = None
+    if metadata_state is not None:
+        if isinstance(metadata_state, dict):
+            candidate = metadata_state.get("configs", metadata_state)
+        else:
+            candidate = getattr(metadata_state, "configs", None)
+        if isinstance(candidate, dict) and candidate:
+            configs = candidate  # type: ignore[assignment]
     config = build_metadata_config(kind, templates=configs)
     if kind == "video" and embedded_images:
         video_options = dict(config.extra_options.get("video", {}))
@@ -121,6 +130,7 @@ def _persist_metadata_payload(
     *,
     metadata_mode: str,
     artifact_kind: str,
+    metadata_state: Optional["MetadataState"],
     metadata_logger: Optional[Any] = None,
     embedded_images: Optional[Dict[str, str]] = None,
 ) -> None:
@@ -132,6 +142,7 @@ def _persist_metadata_payload(
         payload: Metadata dictionary to persist.
         metadata_mode: Either ``"metadata"`` (embed) or ``"json"`` (sidecar).
         artifact_kind: Artifact type hint passed to the metadata resolver.
+        metadata_state: Resolved metadata configuration payload supplied by the caller.
         metadata_logger: Optional logger passed to embedded metadata handlers.
         embedded_images: Optional map of source images for video embeddings.
     """
@@ -145,7 +156,11 @@ def _persist_metadata_payload(
     if metadata_mode != "metadata":
         return
 
-    config = _resolve_metadata_config(artifact_kind, embedded_images=embedded_images)
+    config = _resolve_metadata_config(
+        artifact_kind,
+        metadata_state=metadata_state,
+        embedded_images=embedded_images,
+    )
     write_metadata_bundle(
         path,
         payload,
@@ -2571,7 +2586,11 @@ def edit_video(
                 file_settings_list.append(configs)
 
             if configs is not None:
-                metadata_mode = metadata_choice if metadata_choice is not None else server_config.get("metadata_type", "metadata")
+                metadata_mode = (
+                    metadata_mode_override
+                    if metadata_mode_override is not None
+                    else default_metadata_mode
+                )
                 configs["metadata_mode"] = metadata_mode
                 metadata_logger = get_notifications_logger() if metadata_mode == "metadata" else None
                 temp_images_path: Optional[str] = None
@@ -2586,6 +2605,7 @@ def edit_video(
                     configs,
                     metadata_mode=metadata_mode,
                     artifact_kind="video",
+                    metadata_state=metadata_state,
                     metadata_logger=metadata_logger,
                     embedded_images=embedded_images,
                 )
@@ -2776,6 +2796,7 @@ def generate_video(
     plugin_data=None,
     notifier=None,
     callback_builder=None,
+    metadata_state=None,
 ):
 
 
@@ -2791,6 +2812,13 @@ def generate_video(
 
     global wan_model, offloadobj, reload_needed
     gen = get_gen_info(state)
+    metadata_mode_override = None
+    if metadata_state is not None:
+        if isinstance(metadata_state, dict):
+            metadata_mode_override = metadata_state.get("choice")
+        else:
+            metadata_mode_override = getattr(metadata_state, "choice", None)
+    default_metadata_mode = server_config.get("metadata_type", "metadata")
     torch.set_grad_enabled(False) 
     if mode.startswith("edit_"):
         edit_video(send_cmd, state, mode, video_source, seed, temporal_upsampling, spatial_upsampling, film_grain_intensity, film_grain_saturation, MMAudio_setting, MMAudio_prompt, MMAudio_neg_prompt, repeat_generation, audio_source)
@@ -3714,6 +3742,7 @@ def generate_video(
                 inputs.pop("send_cmd")
                 inputs.pop("task")
                 inputs.pop("mode")
+                inputs.pop("metadata_state", None)
                 inputs["model_type"] = model_type
                 inputs["model_filename"] = original_filename
                 if is_image:
@@ -3740,7 +3769,11 @@ def generate_video(
                     configs["enhanced_prompt"] = "\n".join(prompts)
                 configs["generation_time"] = round(end_time-start_time)
                 # if is_image: configs["is_image"] = True
-                metadata_mode = metadata_choice if metadata_choice is not None else server_config.get("metadata_type", "metadata")
+                metadata_mode = (
+                    metadata_mode_override
+                    if metadata_mode_override is not None
+                    else default_metadata_mode
+                )
                 video_path = [video_path] if not isinstance(video_path, list) else video_path
                 configs["metadata_mode"] = metadata_mode
                 metadata_logger = get_notifications_logger() if metadata_mode == "metadata" else None
@@ -3751,6 +3784,7 @@ def generate_video(
                         configs,
                         metadata_mode=metadata_mode,
                         artifact_kind=artifact_kind,
+                        metadata_state=metadata_state,
                         metadata_logger=metadata_logger,
                         embedded_images=embedded_images if artifact_kind == "video" else None,
                     )

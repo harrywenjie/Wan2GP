@@ -25,6 +25,14 @@ CallbackBuilder = Callable[[Dict[str, Any], SendCommand, str, int], Optional[Cal
 _SENTINEL = object()
 
 
+@dataclass(frozen=True)
+class MetadataState:
+    """Snapshot of metadata persistence configuration for a generation run."""
+
+    choice: str
+    configs: Dict[str, MetadataSaveConfig]
+
+
 @dataclass
 class GenerationRuntime:
     """
@@ -43,6 +51,7 @@ class GenerationRuntime:
     plugin_data: Dict[str, Any] = field(default_factory=dict)
     notifier: Optional[GenerationNotifier] = None
     callback_builder: Optional[CallbackBuilder] = None
+    metadata_state: Optional[MetadataState] = None
 
     def build_task(self, params: Dict[str, Any]) -> Dict[str, Any]:
         if self.task_stub is not None:
@@ -121,6 +130,7 @@ class GenerationRuntime:
                 plugin_data=self.plugin_data,
                 notifier=self.notifier,
                 callback_builder=self.callback_builder,
+                metadata_state=self.metadata_state,
                 **params,
             )
         gen_state = self.state.get("gen", {}) or {}
@@ -302,6 +312,25 @@ class ProductionManager:
             for key, template in templates.items()
         }
 
+    def metadata_state(
+        self,
+        *,
+        choice_override: Optional[str] = None,
+        configs_override: Optional[Dict[str, MetadataSaveConfig]] = None,
+    ) -> MetadataState:
+        """
+        Build a metadata persistence snapshot for the upcoming generation run.
+
+        The caller may supply overrides for the metadata mode or config map.
+        """
+
+        if configs_override is not None:
+            configs = dict(configs_override)
+        else:
+            configs = self._clone_metadata_configs()
+        choice = choice_override if choice_override is not None else self._metadata_choice()
+        return MetadataState(choice=str(choice), configs=configs)
+
     def metadata_config_templates(self) -> Dict[str, MetadataSaveConfig]:
         """
         Return cloned metadata configuration templates for downstream consumers.
@@ -310,7 +339,7 @@ class ProductionManager:
         without affecting the manager's cached templates.
         """
 
-        return self._clone_metadata_configs()
+        return self.metadata_state().configs.copy()
 
     def run_generation(
         self,
@@ -340,12 +369,13 @@ class ProductionManager:
 
         self._ensure_model_ready(params, send_cmd)
 
-        metadata_choice = self._metadata_choice()
-        metadata_configs = self.metadata_config_templates()
         merged_attr_overrides = dict(attr_overrides or {})
-        merged_attr_overrides.setdefault("metadata_choice", metadata_choice)
-        if metadata_configs:
-            merged_attr_overrides.setdefault("metadata_configs", metadata_configs)
+        metadata_choice_override = merged_attr_overrides.pop("metadata_choice", None)
+        metadata_configs_override = merged_attr_overrides.pop("metadata_configs", None)
+        metadata_state = self.metadata_state(
+            choice_override=metadata_choice_override,
+            configs_override=metadata_configs_override,
+        )
 
         runtime = GenerationRuntime(
             wgp=self._wgp,
@@ -359,6 +389,7 @@ class ProductionManager:
             plugin_data=plugin_data or {},
             notifier=resolved_notifier,
             callback_builder=resolved_callback_builder,
+            metadata_state=metadata_state,
         )
         try:
             return runtime.run(params, send_cmd)

@@ -80,19 +80,18 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ---
 
 ## Immediate Next Actions
-- Add a `MetadataState` container to `ProductionManager` that snapshots `metadata_choice` plus cloned templates and expose it through a getter for non-`wgp` callers.
-- Teach `GenerationRuntime` / `wgp.generate_video()` to accept the explicit metadata state payload so runs no longer rely on module-level globals.
-- Delete `wgp.metadata_choice` / `metadata_configs` once the new state plumbing lands, collapsing `_resolve_metadata_config` to consume injected context and updating docs/tests.
+- Port MatAnyOne to request `ProductionManager.metadata_state()` and forward the shared snapshot into `_save_outputs`, then delete the bespoke metadata config loader.
+- Document the new metadata_state contract in `docs/CLI.md` / `docs/APPENDIX_HEADLESS.md` and scrub for references to the removed `wgp.metadata_choice` / `metadata_configs`.
 
 ---
 
 ## Handoff Protocol
 - Start each session by reviewing `docs/CONTEXT.md` for architectural notes and `docs/WORK_HISTORY.md` for the latest work, then consult this plan's `## Immediate Next Actions`.
 - Execute a coherent batch of related tasks from `## Immediate Next Actions` — enough for measurable progress but with a **focused** scope.
-- After completion, append a detailed entry to `docs/WORK_HISTORY.md` (covering code changes, modules touched, assets removed, and validation runs). 
+- After completion, append a detailed entry to `docs/WORK_HISTORY.md` (covering code changes, modules touched, assets removed, and validation runs; omit trivial edits). 
 - Remove finished tasks from `## Immediate Next Actions`.
 - Add follow-up tasks or new task derived from the roadmap/objective to `## Immediate Next Actions` in proper order; 
 - Keep `## Immediate Next Actions` as a concise, timeless checklist.
 - Audit `## Project Roadmap` and `## Validation Expectations`; update `docs/APPENDIX_HEADLESS.md` and `docs/CLI.md` as work lands.
-- Record deeper notes, learnings, and observations in `docs/CONTEXT.md`.
+- Record deeper notes, learnings, and observations in `docs/CONTEXT.md`; prune stale entries.
 - Keep `PROJECT_PLAN_LIVE.md` clear, consistent, and easy for future agents to follow.
