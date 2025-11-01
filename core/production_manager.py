@@ -302,6 +302,16 @@ class ProductionManager:
             for key, template in templates.items()
         }
 
+    def metadata_config_templates(self) -> Dict[str, MetadataSaveConfig]:
+        """
+        Return cloned metadata configuration templates for downstream consumers.
+
+        Callers receive new copies so they can mutate handler bindings or options
+        without affecting the manager's cached templates.
+        """
+
+        return self._clone_metadata_configs()
+
     def run_generation(
         self,
         params: Dict[str, Any],
@@ -331,7 +341,7 @@ class ProductionManager:
         self._ensure_model_ready(params, send_cmd)
 
         metadata_choice = self._metadata_choice()
-        metadata_configs = self._clone_metadata_configs()
+        metadata_configs = self.metadata_config_templates()
         merged_attr_overrides = dict(attr_overrides or {})
         merged_attr_overrides.setdefault("metadata_choice", metadata_choice)
         if metadata_configs:

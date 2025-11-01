@@ -59,7 +59,7 @@ from shared.attention import get_attention_modes, get_supported_attention_modes
 from shared.utils.utils import truncate_for_filesystem, sanitize_file_name, process_images_multithread, get_default_workers
 from shared.utils.process_locks import acquire_GPU_ressources, get_gen_info, release_GPU_ressources, gen_lock
 from core.io import get_available_filename
-from core.io.media import MetadataSaveConfig, clone_metadata_config, write_metadata_bundle
+from core.io.media import MetadataSaveConfig, build_metadata_config, write_metadata_bundle
 from huggingface_hub import hf_hub_download, snapshot_download
 from shared.utils import files_locator as fl 
 import torch
@@ -104,12 +104,8 @@ def _resolve_metadata_config(
     *,
     embedded_images: Optional[Dict[str, str]] = None,
 ) -> MetadataSaveConfig:
-    configs = metadata_configs if isinstance(metadata_configs, dict) else {}
-    template = configs.get(kind)
-    if template is not None:
-        config = clone_metadata_config(template, fallback_hint=kind)
-    else:
-        config = MetadataSaveConfig(format_hint=kind)
+    configs = metadata_configs if isinstance(metadata_configs, dict) and metadata_configs else None
+    config = build_metadata_config(kind, templates=configs)
     if kind == "video" and embedded_images:
         video_options = dict(config.extra_options.get("video", {}))
         video_options["source_images"] = embedded_images

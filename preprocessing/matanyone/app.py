@@ -9,6 +9,7 @@ line.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -85,6 +86,7 @@ class MatAnyOneRequest:
     device: str = _DEFAULT_DEVICE
     attach_audio: bool = True
     codec: str = "libx264_8"
+    metadata_mode: str = "metadata"
     notifier: Optional[Callable[[str], None]] = None
 
     def __post_init__(self) -> None:
@@ -94,6 +96,10 @@ class MatAnyOneRequest:
         self.start_frame = int(self.start_frame)
         if self.end_frame is not None:
             self.end_frame = int(self.end_frame)
+        mode = (self.metadata_mode or "metadata").strip().lower()
+        if mode not in {"metadata", "json"}:
+            raise ValueError(f"Unsupported metadata mode '{self.metadata_mode}'.")
+        self.metadata_mode = mode
 
     @property
     def normalized_mask_type(self) -> str:
@@ -451,24 +457,41 @@ def _save_outputs(
         "new_dim": request.new_dim,
     }
 
-    metadata_config = build_metadata_config("video")
+    metadata["metadata_mode"] = request.metadata_mode
+
+    metadata_mode = request.metadata_mode
+    metadata_config = build_metadata_config("video") if metadata_mode == "metadata" else None
+    metadata_logger = media_logger if metadata_mode == "metadata" else None
+
+    def _write_metadata(path: Path, payload: Dict[str, object]) -> None:
+        if metadata_mode == "json":
+            json_path = path.with_suffix(".json")
+            try:
+                with json_path.open("w", encoding="utf-8") as writer:
+                    json.dump(payload, writer, indent=4)
+            except Exception as exc:  # pragma: no cover - filesystem errors depend on environment
+                if hasattr(media_logger, "warning"):
+                    media_logger.warning("Failed to write metadata sidecar %s: %s", json_path, exc)
+                return
+            if hasattr(media_logger, "debug"):
+                media_logger.debug("Metadata sidecar written to %s", json_path)
+            return
+        if metadata_config is None:
+            return
+        write_metadata_bundle(
+            str(path),
+            payload,
+            config=metadata_config,
+            logger=metadata_logger,
+        )
+
     foreground_metadata = dict(metadata)
     foreground_metadata["artifact_role"] = "foreground"
-    write_metadata_bundle(
-        str(final_foreground_path),
-        foreground_metadata,
-        config=metadata_config,
-        logger=media_logger,
-    )
+    _write_metadata(final_foreground_path, foreground_metadata)
 
     alpha_metadata = dict(metadata)
     alpha_metadata["artifact_role"] = "alpha"
-    write_metadata_bundle(
-        str(final_alpha_path),
-        alpha_metadata,
-        config=metadata_config,
-        logger=media_logger,
-    )
+    _write_metadata(final_alpha_path, alpha_metadata)
 
     return MatAnyOneResult(
         foreground_path=final_foreground_path,

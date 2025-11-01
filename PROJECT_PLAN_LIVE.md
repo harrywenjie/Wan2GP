@@ -80,9 +80,9 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ---
 
 ## Immediate Next Actions
-- Extend `cli.matanyone` with a `--metadata-mode` flag, threading the selection through request objects so `_save_outputs` can emit embedded metadata or JSON sidecars per run.
-- Refactor `wgp._resolve_metadata_config` to lean on the shared `core.io.media` helpers, keeping the source-image embedding logic while removing bespoke copy/cloning code.
-- Expose a public accessor on `ProductionManager` for metadata config templates so downstream pipelines can reuse CLI-provided clones instead of rebuilding defaults.
+- Plumb `ProductionManager.metadata_config_templates()` into MatAnyOne runs so CLI callers reuse server-config metadata overrides instead of rebuilding defaults.
+- Audit the remaining metadata write paths (audio/image post-processing) to ensure JSON sidecars and embedded metadata share the new helper logic.
+- Outline the steps required to relocate `metadata_choice`/`metadata_configs` out of `wgp.py` and into `ProductionManager`, continuing the global-state reduction.
 
 ---
 

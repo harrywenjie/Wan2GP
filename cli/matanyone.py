@@ -96,6 +96,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="FFmpeg codec used when writing MP4 outputs.",
     )
     parser.add_argument(
+        "--metadata-mode",
+        choices=["metadata", "json"],
+        default="metadata",
+        help="Select metadata persistence: embed into media files or write JSON sidecars.",
+    )
+    parser.add_argument(
         "--no-audio",
         dest="attach_audio",
         action="store_false",
@@ -151,6 +157,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             device=args.device,
             attach_audio=args.attach_audio,
             codec=args.codec,
+            metadata_mode=args.metadata_mode,
             notifier=logger.info,
         )
     except SystemExit:
@@ -177,6 +184,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     )
     logger.info("  device: %s", request.device)
     logger.info("  codec: %s", request.codec)
+    logger.info("  metadata_mode: %s", request.metadata_mode)
     logger.info("  attach_audio: %s", request.attach_audio)
 
     if args.dry_run:
@@ -203,6 +211,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     print(f"Alpha mask written to: {result.alpha_path}")
     if result.rgba_zip_path:
         print(f"RGBA archive written to: {result.rgba_zip_path}")
+    if request.metadata_mode == "json":
+        foreground_json = result.foreground_path.with_suffix(".json")
+        alpha_json = result.alpha_path.with_suffix(".json")
+        if foreground_json.exists():
+            print(f"Foreground metadata written to: {foreground_json}")
+        if alpha_json.exists():
+            print(f"Alpha metadata written to: {alpha_json}")
     return 0
 
 

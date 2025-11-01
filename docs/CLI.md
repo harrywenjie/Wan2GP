@@ -60,7 +60,7 @@ Every path must reference an existing file; the CLI validates before execution.
 - `--metadata-mode {metadata,json}` – per-run override for how metadata is emitted. `metadata` embeds structured info back into the rendered media, while `json` writes sidecar manifests next to each artifact. Omit the flag to reuse the persisted default.
 - Generation runs continue to respect `wgp_config.json -> metadata_type` when `--metadata-mode` is not supplied.
 - When `metadata_type` is left at `metadata`, enabling `embed_source_images` preserves reference frames inside the video metadata bundle (the CLI injects this automatically via `ProductionManager`).
-- MatAnyOne follows the same defaults: foreground/alpha MP4s embed metadata unless you opt into JSON sidecars, and the CLI now reuses the shared metadata config factory for consistency.
+- MatAnyOne exposes the same `--metadata-mode` toggle: `metadata` embeds payloads directly in the foreground/alpha MP4s, while `json` writes per-artifact sidecars using the shared metadata config factory.
 
 ### Runtime Controls
 - Unless stated otherwise, runtime toggles act on the current execution only. Persistent defaults continue to originate from `wgp_config.json`; adjust that file directly if you need new baseline behaviour.
@@ -135,6 +135,7 @@ python -m cli.matanyone \
 - `--warmup-frames INT` – warm-up frame count for stabilising propagation (default `10`).
 - `--device TEXT` – execution device (e.g. `cuda`, `cuda:1`, `cpu`).
 - `--codec TEXT` – FFmpeg codec string used when writing MP4 outputs (default `libx264_8`).
+- `--metadata-mode {metadata,json}` – choose whether the foreground/alpha MP4s embed metadata or emit JSON sidecars. Defaults to `metadata`.
 - `--no-audio` – skip audio track reattachment when the source includes audio.
 
 ### Logging & Dry Runs
