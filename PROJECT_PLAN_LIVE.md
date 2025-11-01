@@ -50,24 +50,12 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ---
 
 ## Immediate Next Actions
-- Prototype the artifact manifest writer in `cli.generate` using the JSONL schema defined in `docs/CLI.md`.
-  - **Proposal (2025-11-01)**: Implement a writer that streams manifest entries to `<output_dir>/manifests/run_history.jsonl`, hashing adapter payloads via canonical JSON, and gate emission so failures never write partial records.
-  - **Rationale**: Moves the new manifest spec from design to execution, enabling downstream automation to consume machine-readable run summaries.
-- Enforce `MediaPersistenceContext` coverage inside `wgp` persistence helpers so wrapper fallbacks become unnecessary.
-  - **Proposal (2025-11-01)**: Identify code paths/tests that still call `_save_video_artifact` or `_save_image_artifact` without a context, introduce lightweight fixtures for those entry points, and make the helpers raise early when the context is missing.
-  - **Rationale**: Forces remaining callers onto the unified persistence surface and clears the way for deleting the transitional wrappers.
-
----
-
-## Handoff Protocol
-- Start each session by reviewing `docs/CONTEXT.md` for architectural notes and `docs/WORK_HISTORY.md` for the latest work, then consult this plan's `## Immediate Next Actions`.
-- Execute a coherent batch of related tasks from `## Immediate Next Actions` — enough for measurable progress but with a **focused** scope.
-- After completion, replace the existing `docs/WORK_HISTORY.md` content with a concise (~800 token) summary of prior sessions, then append today’s detailed entry covering code changes.
-- Remove finished tasks from `## Immediate Next Actions`.
-- Add follow-up tasks or new task derived from the roadmap/objective to `## Immediate Next Actions` in proper order; 
-- Keep `## Immediate Next Actions` as a concise, timeless checklist.
-- Audit and prune `## Project Roadmap`, cleaning up stale milestones.
-- Review `## Validation Expectations` and update as needed.
-- Update `docs/APPENDIX_HEADLESS.md` and `docs/CLI.md` for changes.
-- Record deeper notes, learnings, and observations in `docs/CONTEXT.md`; prune stale entries.
-- Keep `PROJECT_PLAN_LIVE.md` clear, consistent, and easy for future agents to follow.
+- Extend the artifact manifest recorder to MatAnyOne so mask/audio workflows emit JSONL alongside CLI runs.
+  - **Proposal (2025-11-01)**: Reuse `ManifestRecorder` inside `cli.matanyone`, wiring the recorder through the pipeline so foreground/alpha exports write entries to the shared manifest path.
+  - **Rationale**: Keeps preprocessing outputs visible to schedulers and ensures manifest consumers can correlate masks/audio with generation runs.
+  - **Design (2025-11-01)**: Thread the recorder through `ProductionManager.media_context()` when MatAnyOne initialises, map mask roles (`mask_foreground`, `mask_alpha`, `rgba_archive`), and mirror the CLI error-handling gates to avoid partial records.
+- Retire legacy `wgp.save_video/save_image` wrappers now that context enforcement is in place.
+  - **Proposal (2025-11-01)**: Audit remaining call sites for the wrappers, migrate any stragglers (MatAnyOne, shared utils) onto `MediaPersistenceContext`, and delete the legacy functions.
+  - **Rationale**: Simplifies persistence to a single surface, eliminates duplicate retry logic, and clears dead imports from preprocessing modules.
+  - **Design (2025-11-01)**: Use `rg` to locate wrapper references, patch consumers to take a `MediaPersistenceContext`, drop the wrapper definitions, and expand tests to cover the new entry points.
+  

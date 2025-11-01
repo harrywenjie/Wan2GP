@@ -4,13 +4,25 @@
 from __future__ import annotations
 
 import json
+import uuid
 
 from argparse import Namespace
+from collections import defaultdict
+from datetime import datetime, timezone
+from itertools import zip_longest
 from logging import Logger
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Set, Tuple
+from types import MethodType
+from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Set, Tuple
 
 from cli.arguments import parse_cli_args
+from cli.manifest import (
+    ArtifactCapture,
+    ManifestRecorder,
+    canonicalize_structure,
+    compute_adapter_hashes,
+    write_manifest_entry,
+)
 from cli.telemetry import configure_logging
 from cli.runner import CLIGenerationNotifier, build_send_cmd, make_cli_callback_builder
 from cli.queue_controller import QueueController
@@ -40,6 +52,141 @@ def _resolve_prompt_enhancer_mode(mode: Optional[str]) -> Optional[str]:
     if mode == "off":
         return ""
     return PROMPT_ENHANCER_MODE_MAP[mode]
+
+
+def _resolve_manifest_path(value: Any) -> Path:
+    path = value if isinstance(value, Path) else Path(str(value))
+    try:
+        return path.expanduser().resolve()
+    except Exception:
+        return path.expanduser()
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pop_capture(
+    index: Dict[Tuple[str, Path], List[ArtifactCapture]],
+    kind: str,
+    resolved_path: Path,
+) -> Optional[ArtifactCapture]:
+    key = (kind, resolved_path)
+    captures = index.get(key)
+    if not captures:
+        return None
+    capture = captures.pop(0)
+    if not captures:
+        index.pop(key, None)
+    return capture
+
+
+def _build_manifest_artifacts(
+    *,
+    video_paths: Sequence[str],
+    video_settings: Sequence[Dict[str, Any]],
+    audio_paths: Sequence[str],
+    audio_settings: Sequence[Dict[str, Any]],
+    captures: Sequence[ArtifactCapture],
+) -> List[Dict[str, Any]]:
+    """Map persisted outputs into manifest artifact descriptors."""
+
+    capture_index: Dict[Tuple[str, Path], List[ArtifactCapture]] = defaultdict(list)
+    for capture in captures:
+        resolved = _resolve_manifest_path(capture.path)
+        capture_index[(capture.kind, resolved)].append(capture)
+
+    artifacts: List[Dict[str, Any]] = []
+
+    for path_str, settings in zip_longest(video_paths, video_settings, fillvalue=None):
+        if path_str is None:
+            continue
+        settings = settings or {}
+        resolved = _resolve_manifest_path(path_str)
+        matched = _pop_capture(capture_index, "video", resolved)
+        container = getattr(matched.config, "container", None) if matched else None
+        codec = getattr(matched.config, "codec_type", None) if matched else None
+        fps = getattr(matched.config, "fps", None) if matched else None
+        if not container:
+            container = resolved.suffix.lstrip(".") or None
+        frames = _coerce_int(settings.get("video_length"))
+        duration = None
+        if fps and frames is not None:
+            try:
+                duration = frames / float(fps)
+            except ZeroDivisionError:
+                duration = None
+        metadata_sidecar = None
+        if settings.get("metadata_mode") == "json":
+            metadata_sidecar = str(resolved.with_suffix(".json"))
+        artifacts.append(
+            {
+                "role": "foreground",
+                "path": str(resolved),
+                "container": container,
+                "codec": codec,
+                "frames": frames,
+                "duration_s": duration,
+                "metadata_sidecar": metadata_sidecar,
+            }
+        )
+
+    for path_str, settings in zip_longest(audio_paths, audio_settings, fillvalue=None):
+        if path_str is None:
+            continue
+        settings = settings or {}
+        resolved = _resolve_manifest_path(path_str)
+        matched = _pop_capture(capture_index, "audio", resolved)
+        container = getattr(matched.config, "format", None) if matched else None
+        codec = getattr(matched.config, "subtype", None) if matched else None
+        if not container:
+            container = resolved.suffix.lstrip(".") or None
+        duration = settings.get("duration_s")
+        duration_value = _coerce_float(duration)
+        metadata_sidecar = None
+        if settings.get("metadata_mode") == "json":
+            metadata_sidecar = str(resolved.with_suffix(".json"))
+        artifacts.append(
+            {
+                "role": "audio",
+                "path": str(resolved),
+                "container": container,
+                "codec": codec,
+                "frames": None,
+                "duration_s": duration_value,
+                "metadata_sidecar": metadata_sidecar,
+            }
+        )
+
+    for (kind, resolved), remaining in list(capture_index.items()):
+        if kind != "mask_archive":
+            continue
+        while remaining:
+            remaining.pop(0)
+            artifacts.append(
+                {
+                    "role": "mask_archive",
+                    "path": str(resolved),
+                    "container": resolved.suffix.lstrip(".") or None,
+                    "codec": None,
+                    "frames": None,
+                    "duration_s": None,
+                    "metadata_sidecar": None,
+                }
+            )
+        capture_index.pop((kind, resolved), None)
+
+    return artifacts
 
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> Namespace:
@@ -876,6 +1023,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     attr_overrides: Dict[str, Any] = {}
     if metadata_mode_override is not None:
         attr_overrides["metadata_choice"] = metadata_mode_override
+    attr_override_payload = attr_overrides or None
     manager = ProductionManager(
         wgp_module=wgp,
         default_notifier=notifier,
@@ -884,8 +1032,30 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         lora_manager=bootstrap_manager.lora_manager(),
         prompt_enhancer=bootstrap_manager.prompt_enhancer(),
     )
+    manifest_recorder: Optional[ManifestRecorder] = None
+    manifest_path: Optional[Path] = None
+    run_id = str(uuid.uuid4())
+    if not args.dry_run:
+        manifest_recorder = ManifestRecorder()
+        original_media_context = manager.media_context
+
+        def media_context_override(self: ProductionManager):
+            base_context = original_media_context()
+            return manifest_recorder.wrap(base_context)
+
+        manager.media_context = MethodType(media_context_override, manager)
+        default_manifest = output_dir / "manifests" / "run_history.jsonl"
+        manifest_target = args.manifest_path if args.manifest_path is not None else default_manifest
+        manifest_path = _resolve_manifest_path(manifest_target)
+
     controller: QueueController | None = None
     control_server: QueueControlServer | None = None
+    queue_entry: Optional[Dict[str, Any]] = None
+    completion_time: Optional[datetime] = None
+    manifest_status = "success"
+    manifest_error: Optional[str] = None
+    outputs: List[str] = []
+    exit_code = 0
     try:
         controller = QueueController(
             manager=manager,
@@ -908,14 +1078,22 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     args.control_port,
                     bound_port,
                 )
-        outputs = controller.run_single(
+        queue_entry = controller.enqueue_task(
             params,
+            attr_overrides=attr_override_payload,
+        )
+        outputs = controller.run_all(
             send_cmd=send_cmd,
             output_dir_override=output_override,
             image_output_dir_override=output_override,
-            attr_overrides=attr_overrides or None,
+            attr_overrides=attr_override_payload,
         )
+        completion_time = datetime.now(timezone.utc)
     except KeyboardInterrupt:
+        manifest_status = "error"
+        manifest_error = "Generation interrupted by user."
+        completion_time = datetime.now(timezone.utc)
+        exit_code = 130
         logger.warning("Generation interrupted by user (Ctrl+C).")
         if controller is not None:
             summary = controller.clear_queue()
@@ -936,10 +1114,57 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             reset_generation_counters(gen_state)
             update_queue_tracking(queue, manager.queue_tracker)
         print("Generation aborted by user.")
-        return 130
+    except Exception as exc:
+        manifest_status = "error"
+        manifest_error = str(exc)
+        completion_time = datetime.now(timezone.utc)
+        raise
     finally:
         if control_server is not None:
             control_server.stop()
+        if manifest_recorder is not None and manifest_path is not None:
+            if completion_time is None:
+                completion_time = datetime.now(timezone.utc)
+            inputs_payload: Mapping[str, Any] = {}
+            adapter_payloads: Mapping[str, Any] = {}
+            if isinstance(queue_entry, dict):
+                metadata_payload = queue_entry.get("metadata")
+                if isinstance(metadata_payload, Mapping):
+                    inputs_payload = metadata_payload
+                    adapter_payloads = metadata_payload.get("adapter_payloads", {})
+                direct_payloads = queue_entry.get("adapter_payloads")
+                if isinstance(direct_payloads, Mapping) and direct_payloads:
+                    adapter_payloads = direct_payloads
+            manifest_entry: Dict[str, Any] = {
+                "run_id": run_id,
+                "timestamp": completion_time.astimezone(timezone.utc).isoformat(),
+                "output_dir": str(_resolve_manifest_path(output_dir)),
+                "metadata_mode": resolved_metadata_mode,
+                "status": manifest_status,
+                "inputs": canonicalize_structure(inputs_payload),
+                "adapter_payload_hashes": compute_adapter_hashes(adapter_payloads),
+            }
+            if manifest_status == "success":
+                gen_state = state.get("gen", {}) or {}
+                video_paths = list(gen_state.get("file_list", []))
+                video_settings = list(gen_state.get("file_settings_list", []))
+                audio_paths = list(gen_state.get("audio_file_list", []))
+                audio_settings = list(gen_state.get("audio_file_settings_list", []))
+                manifest_entry["artifacts"] = _build_manifest_artifacts(
+                    video_paths=video_paths,
+                    video_settings=video_settings,
+                    audio_paths=audio_paths,
+                    audio_settings=audio_settings,
+                    captures=manifest_recorder.captures,
+                )
+            else:
+                manifest_entry["artifacts"] = []
+                if manifest_error:
+                    manifest_entry["error"] = manifest_error
+            write_manifest_entry(manifest_path, manifest_entry)
+
+    if exit_code:
+        return exit_code
     if outputs:
         logger.info("Generation complete: %s", outputs[-1])
         print(f"Generation complete: {outputs[-1]}")

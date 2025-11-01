@@ -115,6 +115,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--manifest-path",
+        type=Path,
+        default=None,
+        help=(
+            "Override the manifest JSONL file path. Defaults to <output_dir>/manifests/run_history.jsonl "
+            "when omitted."
+        ),
+    )
+    parser.add_argument(
         "--image-start",
         type=Path,
         default=None,

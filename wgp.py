@@ -2954,26 +2954,14 @@ def generate_video(
     ) -> Optional[str]:
         logger = get_notifications_logger()
         context = media_context
-        if context is not None and hasattr(context, "save_video"):
-            try:
-                return context.save_video(
-                    data,
-                    target_path,
-                    logger=logger,
-                    config=config,
-                    overrides=overrides,
-                )
-            except AttributeError:
-                pass
-        effective_config = config
-        if effective_config is None:
-            override_kwargs = dict(overrides or {})
-            effective_config = resolve_video_config(**override_kwargs)
-        return save_video(
-            tensor=data,
-            save_file=target_path,
-            config=effective_config,
+        if context is None or not hasattr(context, "save_video"):
+            raise RuntimeError("MediaPersistenceContext is required for video persistence.")
+        return context.save_video(
+            data,
+            target_path,
             logger=logger,
+            config=config,
+            overrides=overrides,
         )
 
     def _save_image_artifact(
@@ -2985,26 +2973,14 @@ def generate_video(
     ) -> str:
         logger = get_notifications_logger()
         context = media_context
-        if context is not None and hasattr(context, "save_image"):
-            try:
-                return context.save_image(
-                    data,
-                    target_path,
-                    logger=logger,
-                    config=config,
-                    overrides=overrides,
-                )
-            except AttributeError:
-                pass
-        effective_config = config
-        if effective_config is None:
-            override_kwargs = dict(overrides or {})
-            effective_config = resolve_image_config(**override_kwargs)
-        return save_image(
+        if context is None or not hasattr(context, "save_image"):
+            raise RuntimeError("MediaPersistenceContext is required for image persistence.")
+        return context.save_image(
             data,
-            save_file=target_path,
-            config=effective_config,
+            target_path,
             logger=logger,
+            config=config,
+            overrides=overrides,
         )
 
     def _save_audio_artifact(

@@ -62,6 +62,7 @@ Every path must reference an existing file; the CLI validates before execution.
 
 ### Output Control
 - `--output-dir PATH` – directory where rendered assets are written. Overrides are per-run; each execution falls back to the configured default (`save_path` inside `wgp.py`) unless the flag is provided again.
+- `--manifest-path PATH` – override where the JSONL manifest is appended. Defaults to `<output_dir>/manifests/run_history.jsonl`; directories are created automatically when absent.
 
 ### Metadata Persistence
 - `--metadata-mode {metadata,json}` – per-run override for how metadata is emitted. `metadata` embeds structured info back into the rendered media, while `json` writes sidecar manifests next to each artifact. Omit the flag to reuse the persisted default.
@@ -111,6 +112,8 @@ Every path must reference an existing file; the CLI validates before execution.
 - `status` – `"success"` or `"error"`. Failures capture `error` (string message) and omit `artifacts`.
 
 The manifest writer must flush the JSON line only after persistence succeeds. Dry runs skip manifest emission entirely. MatAnyOne will reuse the same format once its pipeline emits manifests; its `artifacts` list uses `mask_foreground`, `mask_alpha`, and `rgba_archive` roles.
+
+`cli.generate` instruments `ProductionManager.media_context()` with a recording proxy so every `MediaPersistenceContext.save_*` call is captured before the JSONL row is emitted. Adapter payloads are hashed from canonical JSON (sorted keys, compact separators) to give downstream automation stable digests, and the writer appends entries atomically to the resolved manifest path. Failures log an `"error"` field and skip artifact emission so partial successes never leak into automation feeds.
 
 ### Tips
 - Treat `--dry-run` as your first step for any new command to ensure paths and overrides resolve correctly.

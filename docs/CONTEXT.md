@@ -21,6 +21,7 @@
 - Embedded source images for metadata remain gated by `server_config["embed_source_images"]`; JSON sidecars are emitted when `metadata_mode=json`.
 - `core.io.media.MediaPersistenceContext` now captures the video/image/audio/mask persistence templates plus the legacy `save_masks` debug toggle. `ProductionManager.media_context()` builds a fresh instance from `server_config` for each run and passes it through `GenerationRuntime` to `wgp.generate_video`, which routes saves through the context helpers while retaining the legacy wrappers as a fallback.
 - Artifact manifests will be emitted as JSONL (`manifests/run_history.jsonl` inside the resolved `output_dir`). Each entry records saved artifact paths, the effective metadata mode, a reproducibility snapshot of CLI inputs, and SHA-256 hashes of adapter payloads derived from their canonical JSON serialisations (see `docs/CLI.md` for the public schema). Writers flush entries only after persistence succeeds; dry runs skip emission.
+- `cli.generate` now wraps `ProductionManager.media_context()` with a `ManifestRecorder`, capturing every `MediaPersistenceContext.save_*` invocation before the JSONL writer emits a row. Adapter payload hashes are derived from canonical JSON, and failures log an `"error"` field while omitting artifacts so partially persisted runs never leak into downstream automation.
 
 ### Legacy Persistence Wrappers (Audit 2025-11-01)
 
@@ -28,7 +29,7 @@
 - `shared.utils.audio_video.save_video/save_image` remain thin adapters that construct `VideoSaveConfig`/`ImageSaveConfig` objects before delegating to `core.io.media.write_*`. They are imported by MatAnyOne (which now prefers the context) and a few legacy helpers under `shared/utils`.
 - Additional duplicates (`shared.utils.utils.save_image`, `models/wan/*/utils.py::save_video`) persist for historical flows and are candidates for deletion once the CLI path no longer imports them.
 - Deprecation plan:
-  1. Enforce `MediaPersistenceContext` construction across all CLI and test entry points, then update `_save_video_artifact`/`_save_image_artifact` to require the context instead of silently falling back to the wrappers. Provide targeted fixtures for tests that currently call `wgp` directly.
+  1. (done) `_save_video_artifact`/`_save_image_artifact` now require a `MediaPersistenceContext` and raise when the context is missing; tests pin `GenerationRuntime` to that contract.
   2. Port any remaining MatAnyOne or preprocessing helpers that still import `shared.utils.audio_video.save_*` to rely on `MediaPersistenceContext` (or the new CLI manifest writer) so the adapter layer can be deleted.
   3. After consumers are migrated, delete `wgp.save_video/save_image` and `shared.utils.audio_video.save_*`, replacing them with direct calls into `core.io.media`. Follow up by pruning dead convenience copycats (`shared.utils.utils.save_image`, `models/wan/*/utils.py::save_video`) and update docs/tests to reflect the single persistence surface.
 

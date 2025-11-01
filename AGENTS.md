@@ -54,3 +54,17 @@ All actions should move the codebase toward minimalism, reproducibility, and det
 - Record new insights or architectural notes in `docs/CONTEXT.md`, use `docs/WORK_HISTORY.md` for detailed session logs, and keep `PROJECT_PLAN_LIVE.md` focused on current objectives, roadmap, and task lists.
 - Follow `## Handoff Protocol` in `PROJECT_PLAN_LIVE.md`; ensure `## Immediate Next Actions` always lists the next concrete tasks before you stop.
 - Keep sensitive artifacts (weights, media, tokens) **out of version control**; document required paths and environment variables explicitly.
+
+---
+
+## Handoff Protocol
+- Execute a coherent batch of related tasks from `## Immediate Next Actions` — enough for measurable progress but with a **focused** scope.
+- After completion, replace the existing `docs/WORK_HISTORY.md` content with a concise (~800 token) summary of prior sessions, then append today’s detailed entry covering code changes.
+- Remove finished tasks from `## Immediate Next Actions`.
+- Add follow-up tasks or new task derived from the roadmap/objective to `## Immediate Next Actions` in proper order; 
+- Keep `## Immediate Next Actions` as a concise, timeless checklist.
+- Audit and prune `## Project Roadmap`, cleaning up stale milestones.
+- Review `## Validation Expectations` and update as needed.
+- Update `docs/APPENDIX_HEADLESS.md` and `docs/CLI.md` for changes.
+- Record deeper notes, learnings, and observations in `docs/CONTEXT.md`; prune stale entries.
+- Keep `PROJECT_PLAN_LIVE.md` clear, consistent, and easy for future agents to follow.
