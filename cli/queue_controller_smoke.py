@@ -32,6 +32,10 @@ class _StubManager:
     def __init__(self) -> None:
         self.queue_tracker = QueueStateTracker()
         self.wgp = SimpleNamespace()
+        self._task_inputs = _StubTaskInputs()
+
+    def task_inputs(self) -> "_StubTaskInputs":
+        return self._task_inputs
 
     def run_generation(  # type: ignore[override]
         self,
@@ -48,6 +52,7 @@ class _StubManager:
         plugin_data=None,
         task_stub=None,
         task_seed: Optional[int] = None,
+        adapter_payloads: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
         gen_state = state.setdefault("gen", {})
         gen_state["in_progress"] = True
@@ -72,6 +77,21 @@ class _StubManager:
                 time.sleep(0.01)
         gen_state["in_progress"] = False
         return list(outputs)
+
+
+class _StubTaskInputs:
+    def prepare_inputs_dict(
+        self,
+        target: str,
+        inputs: Dict[str, Any],
+        model_type: Optional[str] = None,
+        model_filename: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        resolved = dict(inputs)
+        resolved.setdefault("activated_loras", [])
+        if target == "metadata":
+            resolved.setdefault("adapter_payloads", {})
+        return resolved
 
 
 def run_smoke() -> List[str]:

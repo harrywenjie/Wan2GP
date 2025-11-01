@@ -57,6 +57,9 @@ class GenerationRuntime:
     callback_builder: Optional[CallbackBuilder] = None
     metadata_state: Optional[MetadataState] = None
     media_context: Optional[MediaPersistenceContext] = None
+    adapter_payloads: Optional[Dict[str, Any]] = None
+    lora_manager: Optional[LoRAInjectionManager] = None
+    prompt_enhancer: Optional[PromptEnhancerBridge] = None
 
     def build_task(self, params: Dict[str, Any]) -> Dict[str, Any]:
         if self.task_stub is not None:
@@ -128,6 +131,7 @@ class GenerationRuntime:
 
     def run(self, params: Dict[str, Any], send_cmd: SendCommand) -> List[str]:
         task = self.build_task(params)
+        self._apply_adapter_payloads(params)
         with self.apply_runtime_overrides():
             self.wgp.generate_video(
                 task,
@@ -142,6 +146,48 @@ class GenerationRuntime:
         gen_state = self.state.get("gen", {}) or {}
         outputs = gen_state.get("file_list", []) or []
         return list(outputs)
+
+    def _apply_adapter_payloads(self, params: Dict[str, Any]) -> None:
+        payloads = self.adapter_payloads if isinstance(self.adapter_payloads, dict) else {}
+        model_type = params.get("model_type")
+        lora_payload = payloads.get("lora")
+        prompt_payload = payloads.get("prompt_enhancer")
+
+        if lora_payload and isinstance(lora_payload, dict) and isinstance(model_type, str):
+            manager = self.lora_manager
+            if manager is not None:
+                try:
+                    manager.hydrate(model_type)
+                except Exception:  # pragma: no cover - defensive
+                    pass
+            available = list(lora_payload.get("available", []))
+            presets = list(lora_payload.get("presets", []))
+            activated = list(lora_payload.get("activated", []))
+            multipliers = lora_payload.get("multipliers")
+
+            state = self.state
+            state["loras"] = available
+            state["loras_presets"] = presets
+
+            params["activated_loras"] = activated
+            if multipliers is not None:
+                params["loras_multipliers"] = multipliers
+
+        bridge = self.prompt_enhancer
+        if prompt_payload and isinstance(prompt_payload, dict):
+            provider = prompt_payload.get("provider")
+            enhancer_mode = prompt_payload.get("enhancer_mode")
+            server_config = getattr(self.wgp, "server_config", None)
+            if isinstance(server_config, dict):
+                if provider is not None:
+                    server_config["enhancer_enabled"] = provider
+                if enhancer_mode is not None:
+                    server_config["enhancer_mode"] = enhancer_mode
+        if bridge is not None and not params.get("prompt_enhancer"):
+            try:
+                bridge.reset()
+            except Exception:  # pragma: no cover - defensive
+                pass
 
 
 class ProductionManager:
@@ -240,6 +286,8 @@ class ProductionManager:
                 prompt_enhancer=self.prompt_enhancer(),
             )
             self._task_inputs_manager = manager
+        if hasattr(self._wgp, "_task_inputs_manager"):
+            setattr(self._wgp, "_task_inputs_manager", manager)
         return manager
 
     def _resolve_notifier(self, override: Optional[GenerationNotifier]) -> Optional[GenerationNotifier]:
@@ -377,6 +425,35 @@ class ProductionManager:
 
         return self.metadata_state().configs.copy()
 
+    def _build_adapter_payloads(
+        self,
+        params: Dict[str, Any],
+        provided_payloads: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        if provided_payloads is not None:
+            return provided_payloads
+
+        manager = self.task_inputs()
+        payloads: Dict[str, Any] = {}
+        model_type = params.get("model_type")
+        activated = params.get("activated_loras")
+        multipliers = params.get("loras_multipliers")
+
+        if isinstance(model_type, str):
+            lora_payload = manager.build_lora_payload(
+                model_type,
+                activated,
+                multipliers=multipliers,
+            )
+            if lora_payload:
+                payloads["lora"] = lora_payload
+
+        prompt_payload = manager.resolve_prompt_enhancer(params.get("prompt_enhancer"))
+        if prompt_payload:
+            payloads["prompt_enhancer"] = prompt_payload
+
+        return payloads or None
+
     def run_generation(
         self,
         params: Dict[str, Any],
@@ -392,6 +469,7 @@ class ProductionManager:
         plugin_data: Optional[Dict[str, Any]] = None,
         task_stub: Optional[Dict[str, Any]] = None,
         task_seed: int = 1,
+        adapter_payloads: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
         resolved_notifier = self._resolve_notifier(notifier)
         resolved_callback_builder = self._resolve_callback_builder(callback_builder)
@@ -413,6 +491,9 @@ class ProductionManager:
             configs_override=metadata_configs_override,
         )
         media_context = self.media_context()
+        resolved_adapter_payloads = self._build_adapter_payloads(params, adapter_payloads)
+        lora_manager = self.lora_manager()
+        prompt_enhancer_bridge = self.prompt_enhancer()
 
         runtime = GenerationRuntime(
             wgp=self._wgp,
@@ -428,6 +509,9 @@ class ProductionManager:
             callback_builder=resolved_callback_builder,
             metadata_state=metadata_state,
             media_context=media_context,
+            adapter_payloads=resolved_adapter_payloads,
+            lora_manager=lora_manager,
+            prompt_enhancer=prompt_enhancer_bridge,
         )
         try:
             return runtime.run(params, send_cmd)

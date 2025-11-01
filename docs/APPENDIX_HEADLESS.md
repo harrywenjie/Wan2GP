@@ -63,7 +63,7 @@ Runtime bootstrap now lives in `wgp.initialize_runtime()`, which loads `wgp_conf
 ## Reference Notes
 - CLI flag surface: the canonical list lives in `docs/CLI.md`. Update that document when adding or removing arguments.
 - Model footprint guidance: see `docs/CONTEXT.md` → `# Detailed Context` for the current keep/drop recommendations.
-- Adapter shims: `core/lora/manager.LoRAInjectionManager` and `core/prompt_enhancer/bridge.PromptEnhancerBridge` provide cached discovery/priming layers. Use their `snapshot_state()` helpers when debugging cache contents and prefer `reset()` over mutating the legacy globals directly.
+- Adapter shims: `core/lora/manager.LoRAInjectionManager` and `core/prompt_enhancer/bridge.PromptEnhancerBridge` provide cached discovery/priming layers. Use their `snapshot_state()` helpers when debugging cache contents and prefer `reset()` over mutating the legacy globals directly. `TaskInputManager.build_lora_payload()` / `.resolve_prompt_enhancer()` now embed adapter payloads into queue metadata so background workers replay the cached state without touching `wgp` globals.
 
 ## Queue Control Harness
 - `cli.queue_controller.QueueController` is the default queue orchestrator; the legacy `wgp.process_tasks` loop has been removed along with the `--legacy-queue` escape hatch.

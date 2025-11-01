@@ -107,6 +107,7 @@ class QueueController:
             params["activated_loras"] = resolved_loras
         if "loras_multipliers" in metadata:
             params["loras_multipliers"] = metadata["loras_multipliers"]
+        adapter_payloads = metadata.get("adapter_payloads") if isinstance(metadata, dict) else None
 
         preview = get_preview_images(params)
 
@@ -119,6 +120,8 @@ class QueueController:
             "start_image_data": preview.start_data,
             "end_image_data": preview.end_data,
         }
+        if adapter_payloads:
+            queue_entry["adapter_payloads"] = adapter_payloads
         if attr_overrides:
             queue_entry["attr_overrides"] = dict(attr_overrides)
         queue_entry.update(self._build_queue_summary(params, metadata, preview))
@@ -313,6 +316,10 @@ class QueueController:
         if isinstance(task_specific_overrides, dict):
             merged_attr_overrides.update(task_specific_overrides)
         resolved_attr_overrides = merged_attr_overrides or None
+        metadata = task.get("metadata")
+        adapter_payloads = task.get("adapter_payloads")
+        if adapter_payloads is None and isinstance(metadata, dict):
+            adapter_payloads = metadata.get("adapter_payloads")
 
         def worker() -> None:
             try:
@@ -329,6 +336,7 @@ class QueueController:
                     plugin_data=plugin_data,
                     task_stub=task_stub,
                     task_seed=task_seed,
+                    adapter_payloads=adapter_payloads,
                 )
                 stream.output_queue.push("outputs", outputs)
             except Exception as exc:  # pragma: no cover - defensive relay

@@ -33,16 +33,17 @@
 - **ProductionManager integration**
   - `ProductionManager.lora_manager()` / `.prompt_enhancer()` vend cached adapter instances; callers may inject shared adapters when constructing managers so queue controllers reuse discovery caches.
   - CLI `generate` hydrates LoRA listings via the adapter and reuses the same instances when building the runtime `ProductionManager`.
+  - `run_generation()` now threads adapter payloads into `GenerationRuntime`, which updates queue state and server_config overrides before delegating to the legacy module.
 - **TaskInputManager touchpoints**
   - `prepare_inputs_dict` and settings loaders now hydrate LoRA inventories through `lora_inventory()` before resolving selections, keeping metadata prep aligned with adapter state.
-  - Follow-up work will add `build_lora_payload` / `resolve_prompt_enhancer` helpers so queue serialization records adapter payloads instead of raw `wgp` lookups.
+  - `build_lora_payload` and `resolve_prompt_enhancer` capture deterministic adapter snapshots for metadata, queue entries, and runtime execution.
 - **State management**
-  - LoRA discovery is cached in-memory only; `snapshot_state()` exposes counts for debug flags, while `reset()` clears caches for future CLI hooks.
+  - LoRA discovery is cached in-memory only; `snapshot_state()` exposes counts for debug flags, while `reset()` clears caches for future CLI hooks. Adapter payloads flow through queue metadata so workers never touch `wgp.update_loras_url_cache`.
   - Prompt enhancer priming is tracked per server hash; `reset()` releases models via the legacy helper until the runtime extraction lands.
 - **Implementation phases**
   1. (done) Adapter shims plus smoke tests landed (`tests/test_lora_manager.py`, `tests/test_prompt_enhancer_bridge.py`).
   2. (done) `ProductionManager`, `TaskInputManager`, and the CLI now depend on the adapters; `wgp` remains the execution backend for activation.
-  3. (pending) Remove the fallback paths and delete the old helpers once CLI adoption is complete, documenting the transition in `docs/APPENDIX_HEADLESS.md`.
+  3. (in progress) Queue metadata + runtime execution now rely on adapter payloads; next step is deleting the remaining fallback helpers (`setup_loras`, `setup_prompt_enhancer`) once the adapters assume activation duties.
 
 ## ProductionManager Dependency Snapshot
 

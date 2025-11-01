@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from threading import Lock
-from typing import Any, Callable, Dict, List, MutableMapping, Optional, Sequence, Tuple, Literal
+from typing import Any, Callable, Dict, List, MutableMapping, Optional, Sequence, Tuple, Literal, Mapping
 
 from core.lora.manager import LoRAHydrationResult, LoRAInjectionManager
 from core.prompt_enhancer.bridge import PromptEnhancerBridge
@@ -21,6 +22,22 @@ from shared.utils.utils import (
 )
 
 SettingsLoader = Callable[..., Tuple[Optional[Dict[str, Any]], bool, bool]]
+
+
+def _normalise_for_hash(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _normalise_for_hash(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_normalise_for_hash(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return repr(value)
+
+
+def _hash_server_config_snapshot(server_config: Mapping[str, Any]) -> str:
+    normalised = _normalise_for_hash(server_config)
+    payload = json.dumps(normalised, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 @dataclass
@@ -202,6 +219,60 @@ class TaskInputManager:
         self._lora_hydrations[model_type] = hydration
         return hydration
 
+    def _server_config_hash(self) -> str:
+        server_config_obj = self._server_config
+        if isinstance(server_config_obj, Mapping):
+            mapping: Mapping[str, Any] = server_config_obj
+        else:
+            mapping = dict(server_config_obj or {})  # type: ignore[arg-type]
+        return _hash_server_config_snapshot(mapping)
+
+    def build_lora_payload(
+        self,
+        model_type: str,
+        activated_loras: Optional[Sequence[str]],
+        *,
+        multipliers: Optional[str],
+        refresh: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        hydration = self.lora_inventory(model_type, refresh=refresh)
+        if hydration is None:
+            return None
+        library = hydration.library
+        payload: Dict[str, Any] = {
+            "model_type": library.model_type,
+            "server_config_hash": library.server_config_hash,
+            "available": list(library.loras),
+            "presets": list(library.presets),
+            "default_choices": list(hydration.default_choices),
+            "default_multipliers": hydration.default_multipliers,
+            "default_prompt": hydration.default_prompt,
+            "default_preset": hydration.default_preset,
+            "activated": list(activated_loras or ()),
+        }
+        if library.lora_dir is not None:
+            payload["lora_dir"] = str(library.lora_dir)
+        if multipliers is not None:
+            payload["multipliers"] = str(multipliers)
+        return payload
+
+    def resolve_prompt_enhancer(self, prompt_enhancer: Optional[str]) -> Optional[Dict[str, Any]]:
+        if prompt_enhancer is None:
+            return None
+        server_config = self._server_config or {}
+        provider_code = int(server_config.get("enhancer_enabled", 0) or 0)
+        enhancer_mode = int(server_config.get("enhancer_mode", 0) or 0)
+        payload: Dict[str, Any] = {
+            "mode": prompt_enhancer,
+            "provider": provider_code,
+            "enhancer_mode": enhancer_mode,
+            "server_config_hash": self._server_config_hash(),
+        }
+        bridge = self._prompt_enhancer_bridge
+        if bridge is not None:
+            payload["cache_state"] = bridge.snapshot_state()
+        return payload
+
     def _lora_dir_for_model(self, model_type: str) -> Optional[str]:
         hydration = self.lora_inventory(model_type)
         if hydration is not None and hydration.library.lora_dir is not None:
@@ -226,7 +297,8 @@ class TaskInputManager:
             model_type = state["model_type"]
 
         lora_dir = self._lora_dir_for_model(model_type)
-        inputs["activated_loras"] = self.resolve_loras_selection(lora_dir, loras_choices)
+        resolved_loras = self.resolve_loras_selection(lora_dir, loras_choices)
+        inputs["activated_loras"] = resolved_loras
 
         if target == "state":
             return inputs
@@ -368,6 +440,19 @@ class TaskInputManager:
             inputs.pop(key, None)
 
         if target == "metadata":
+            adapter_payloads: Dict[str, Any] = {}
+            lora_payload = self.build_lora_payload(
+                model_type,
+                resolved_loras,
+                multipliers=inputs.get("loras_multipliers"),
+            )
+            if lora_payload:
+                adapter_payloads["lora"] = lora_payload
+            prompt_payload = self.resolve_prompt_enhancer(inputs.get("prompt_enhancer"))
+            if prompt_payload:
+                adapter_payloads["prompt_enhancer"] = prompt_payload
+            if adapter_payloads:
+                inputs["adapter_payloads"] = adapter_payloads
             inputs = {k: v for k, v in inputs.items() if v is not None}
 
         return inputs

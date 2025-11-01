@@ -30,6 +30,7 @@ python -m cli.generate \
 - `--prompt-enhancer {off,text,image,text+image}` – toggle the built-in prompt enhancer. `text` runs the LLM rewrite only, `image` captions the first reference frame, and `text+image` combines both. Overrides apply to the active run only; omit the flag to reuse the persisted default (usually disabled).
 - `--prompt-enhancer-provider {llama3_2,joycaption}` – pick which backend to load when the enhancer is active. Defaults to `llama3_2`; requires `--prompt-enhancer`. Like other runtime toggles this selection is per-run unless written into `wgp_config.json` manually.
 - Prompt enhancer priming is mediated by `core.prompt_enhancer.bridge.PromptEnhancerBridge`; the bridge caches loaded models per server configuration so repeat runs avoid gratuitous reloads, while `reset()` support will surface as a CLI flag in a later pass.
+- Metadata snapshots include `adapter_payloads["prompt_enhancer"]` describing the selected mode/provider so queue workers and post-processing tools can reconstruct enhancer state without re-reading `wgp` globals.
 - `--seed INT` – fixed seed for deterministic runs. Use `-1` to request a random seed from the pipeline.
 - `--force-fps {auto,control,source,INT}` – override the output frame rate or reuse preset behaviour.
 
@@ -40,6 +41,8 @@ python -m cli.generate \
 - `--lora-preset NAME` – load a `.lset`/`.json` preset from the model’s LoRA directory. The preset merges with any `--loras` and multiplier overrides supplied on the CLI.
 
 LoRA discovery now flows through `core.lora.manager.LoRAInjectionManager`, so repeated listings reuse cached directory scans keyed on `(model_type, server_config_hash)`. Cache resets are automatic when the server configuration changes; explicit reset hooks will land alongside future CLI flags.
+
+Every queued task records a deterministic adapter payload (`metadata["adapter_payloads"]["lora"]`) that captures the discovery hash, available weights/presets, activated selections, and multiplier string. The queue controller forwards this payload to the worker so LoRA activation never re-queries `wgp` during execution.
 
 Macro-based prompt assembly and the legacy “wizard” surface have been removed; author prompts directly or script your own templating before invoking the CLI.
 
