@@ -8,83 +8,34 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ---
 
 ## Project Roadmap
-1. **Purge Gradio and plugin surface**
-   - [Done] Delete `shared/gradio/*`, `shared/utils/plugins.py`, the entire `plugins/` tree, and plugin hooks from `wgp.py`.
-   - [Done] Remove remaining `gradio` imports in `wgp.py` / `preprocessing/matanyone/app.py`, replacing event/progress helpers with CLI-native dataclasses.
-   - [In Progress] Strip residual HTML/theme toggles and delete lingering UI assets (CLI theme flag removed; audit screenshots/theme knobs before final cleanup).
 
-### Plugin Removal Plan (2025-02-14)
-- **Phase 1 – Detach plugin manager**
-  - [Done] Freeze dependencies on `server_config["enabled_plugins"]` and document the CLI-only configuration flow before excision.
-  - [Done] Delete `shared/utils/plugins.py`, `plugins.json`, and the `plugins/` directory; strip `WAN2GPApplication` usage plus related imports from `wgp.py`.
-  - [Done] Replace plugin tab wiring (`app.initialize_plugins`, `setup_ui_tabs`, `run_component_insertion`) with explicit CLI/queue stubs so the remaining code no longer assumes plugin hooks.
-- **Phase 2 – Retire Gradio galleries**
-  - [Done] Remove `shared/gradio/audio_gallery.py` and `shared/gradio/gallery.py`; inline minimal gallery stubs inside `wgp.py` to preserve state wiring.
-  - [Pending] Salvage any reusable media normalisation helpers into CLI utilities or delete them if no longer needed.
-- **Phase 3 – Clean trailing assets**
-  - [In Progress] Remove residual plugin/UI assets (icons + favicon removed; legacy screenshots/theme knobs still pending review).
-  - [Done] Update documentation to clarify that plugin-driven experiences are no longer supported and note CLI equivalents if they exist.
-  - [Done] Implemented CLI preview/progress logging (queue summary media annotations + debug preview logs) and deleted the unused HTML helpers alongside the `ui.html` shim.
+**Milestone 1 – Eliminate residual GUI surface (Active)**
+- [In Progress] Audit and remove remaining UI artifacts (legacy screenshots, theme toggles, stray assets).
+- [Pending] Decide whether any gallery/media normalisation helpers should be salvaged into CLI utilities or deleted. (Prior plugin-removal phases are archived in `docs/WORK_HISTORY.md`.)
 
-2. **Establish the Production Manager core**
-   - [Planned] Introduce `core/production_manager.py` with a `ProductionManager` class that owns model orchestration, notifier wiring, and the generation lifecycle previously handled in `wgp.py`.
-   - [Planned] Clarify that `ProductionManager` is the long-term replacement for `wgp.py`; treat any wrapper usage as a temporary bridge while we migrate the remaining helpers.
-   - [Planned] Identify and inject dependencies (models, loaders, metadata helpers) so the class operates without mutating module-level globals.
-   - [Planned] Provide a thin compatibility shim so current CLI entrypoints can invoke `ProductionManager` while the remaining `wgp` functionality is migrated, and track the follow-up work required to delete `wgp.py` entirely.
+**Milestone 2 – Finish Production Manager extraction (Active)**
+- [In Progress] Replace `wgp.generate_video` persistence paths with `MediaPersistenceContext` helpers supplied by `ProductionManager`.
+- [Planned] Lift prompt-enhancer and LoRA orchestration into dedicated adapters so CLI flows depend on `ProductionManager` instead of `wgp`. Dependency details live in `docs/CONTEXT.md` (“ProductionManager Dependency Snapshot”).
+- [Planned] Continue peeling residual runtime globals (model load/release, queue callbacks) listed in `docs/CONTEXT.md`.
 
-### ProductionManager Extraction Inventory (2025-02-18)
-- Runtime coupling: `ProductionManager` still reads `wan_model`, `transformer_type`, `reload_needed`, and profile defaults, calling `load_models` / `release_model` to hydrate state before delegating to `generate_video`.
-- Task input hooks: `TaskInputManager` depends on `wgp` for model discovery (`get_model_record`, `get_model_name`, `get_model_def`, `get_base_model_type`, `get_model_family`) plus compatibility gates (`test_vace_module`, `test_class_t2v`, `test_any_sliding_window`, `any_audio_track`, `are_model_types_compatible`) and configuration writers (`get_settings_file_name`, `set_model_settings`, `get_default_settings`, `get_model_settings`, `fix_settings`, `notify_info`, `lock`).
-- Output persistence: `generate_video` now imports the filename allocator from `core.io.get_available_filename` but still writes assets/metadata through inline helpers (`save_video`, `save_image`, `save_image_metadata`, `save_audio_metadata`, `save_video_metadata`) that live inside `wgp.py`.
-- Prompt & LoRA prep: CLI flows call `setup_loras`, `extract_preset`, `process_prompt_enhancer`, and enhancer initialisers (`reset_prompt_enhancer`, `setup_prompt_enhancer`) directly on `wgp`.
-- Queue/notifier integration: `GenerationRuntime` falls back to `create_legacy_notifier`, mutates queue state via `update_task_thumbnails`, and still expects progress resets to live in `wgp`.
-- Save helper extraction outline (2025-02-18):
-  1. Carve out `core/io/media.py` (or extend `core/io.py`) with focused writers: `write_video_frames`, `write_image_tensor`, and `write_metadata_bundle`. Each should accept explicit dependency bundles (codecs, quality presets, logger, retry policy) instead of reading globals.
-  2. Introduce lightweight config dataclasses (`VideoSaveConfig`, `ImageSaveConfig`, `MetadataSaveConfig`) that encapsulate `server_config`-derived defaults (codec/container/quality) so callers inject them through `ProductionManager` rather than mutating `wgp`.
-  3. Provide logging hooks by passing a `logger` or callable into the helpers; replace the current `print` statements in `shared.utils.audio_video` with structured logging surfaced through the injected notifier/logger.
-  4. Update `wgp.generate_video` and MatAnyOne to consume the new helpers via `ProductionManager`-supplied adapters, keeping return values/backwards compatibility intact while shrinking direct dependencies on `shared.utils.audio_video`.
-  5. Relocate the metadata writers (`save_video_metadata`, `save_image_metadata`, `save_audio_metadata`) alongside the new module, exposing them through a unified interface so future queue runners can mock or redirect persistence easily.
-- **Save helper call inventory (2025-02-19)**
-  - `wgp.py:2532` writes post-processing tensors to disk via `save_video(...)`, needing a `VideoSaveConfig` assembled from CLI overrides and temp-path helpers for MMAudio muxing.
-  - `wgp.py:3396-3400` dumps guide/mask tensors when `--save-masks` is active; the writer must accept raw torch tensors plus explicit `value_range=(0, 1)`.
-  - `wgp.py:3704` encodes still-frame batches with `save_image(...)`, coupling JPEG/WebP quality to `server_config["image_output_codec"]`.
-  - `wgp.py:3710` encodes a temporary video for audio muxing; it shares parameters with the final writer but needs deterministic temp naming (`get_available_filename`) and retry semantics.
-  - `wgp.py:3737` emits the final video artifact with the same codec/container overrides.
-  - Interface needs:
-    - Add a `build_video_save_config` / `build_image_save_config` helper in `core/io/media` so callers receive dataclasses without reaching into `server_config`.
-    - Let `ProductionManager` construct and pass a `MediaPersistenceContext` (video/image configs + debug flags) into `GenerationRuntime`, removing the local wrappers.
-    - Decide whether mask dumps stay (arm via CLI flag) or move to a structured logging hook to avoid quietly writing into CWD.
+**Milestone 3 – Harden CLI orchestration (Active)**
+- [In Progress] Keep queue management under `cli/` while retiring legacy shims; move any remaining helpers out of `core/`.
+- [Planned] Finish disk-first workflows for mask/voice pipelines and document validation expectations for each CLI entrypoint.
 
-### Prompt Enhancer & LoRA Dependency Map (2025-02-19)
-- Prompt enhancer loader: `setup_prompt_enhancer` (wgp.py:1707-1736) reads `server_config["enhancer_enabled"]`, uses `fl` to locate Florence2/Llama weights, instantiates HF models (`AutoModelForCausalLM`, `AutoProcessor`, `AutoTokenizer`), threads them into `pipe`, and updates the shared `enhancer_offloadobj`.
-- Prompt enhancer runtime: `process_prompt_enhancer` (wgp.py:2671-2701) consumes the cached models, `generate_cinematic_prompt`, and `seed_everything`, mixing optional image inputs; `generate_video` gates it via `server_config["enhancer_mode"]`.
-- LoRA discovery: `get_transformer_loras`, `check_loras_exist`, and `extract_preset` pull from `get_model_recursive_prop`, `TaskInputManager` caches, `get_lora_dir`, and the filesystem to resolve filenames/multipliers.
-- LoRA application: `generate_video` (wgp.py:2914-2950) parses CLI/transformer LoRAs with `parse_loras_multipliers`, validates presence via `TaskInputManager`, then invokes `offload.load_loras_into_model`/`sync_models_loras`.
-- Injection implications: `ProductionManager` needs explicit hooks to request enhancer models, LoRA directories, and multiplier parsers so the runtime no longer mutates module-level globals or reaches into `offload` directly.
+**Milestone 4 – Prune GUI-dependent tooling (Ongoing)**
+- [In Progress] Audit preprocessing utilities for GUI assumptions and refactor or remove as needed.
+- [Pending] Gate or retire models that still require interactive inputs.
+- [Planned] Extract the prompt enhancer stack into a shared module and stand up a provider abstraction for local/cloud backends.
 
-3. **Externalise queueing and CLI orchestration**
-   - [In Progress] Keep queue management under `cli/` (and future worker integrations) while `ProductionManager` exposes stateless generation hooks.
-   - [Planned] Relocate `QueueStateTracker` and related helpers out of `core/` into the CLI queue package so inference code remains the only surface under `core/`.
-   - [In Progress] Adapt mask/voice workflows (MatAnyOne headless pipeline landed; audio editors still pending) to operate purely on disk-based inputs with CLI flags.
-   - [Done] Replace `gr.*` notifications with structured logging/exception flows.
+**Milestone 5 – Retire ancillary runtimes (Pending)**
+- [Pending] Remove Docker scripts and legacy launch docs once CLI parity is confirmed.
+- [Pending] Audit Pinokio/one-click installers and drop any UI-only tooling.
 
-4. **Cull GUI-dependent features and models**
-   - [In Progress] Drop or refactor preprocessing tools that still require canvases (`preprocessing/matanyone/` now headless; audit remaining tools).
-   - [Pending] Audit models that depend on UI interactivity; remove or gate them until CLI workflows exist.
-   - [In Progress] Document file-based inputs for retained models and update loaders (initial docs created; needs per-model validation).
-   - [Planned] Extract the prompt enhancer stack (Florence2 + Llama-based rewrite helper) into a shared module and retire the LTX video diffusion pipeline once the enhancer has a neutral home.
-   - [Planned] Introduce a prompt-enhancer provider abstraction that supports both the existing local models and future cloud LLM endpoints, including configuration for credentials, rate limits, and user-selectable provider flags.
+**Milestone 6 – Documentation upkeep (Ongoing)**
+- [In Progress] Keep this plan, `docs/CLI.md`, and `docs/APPENDIX_HEADLESS.md` aligned with the headless workflows.
 
-5. **Retire ancillary runtimes**
-   - [Pending] Remove Docker scripts (`run-docker-cuda-deb.sh`, `Dockerfile`, etc.) and legacy launch docs once CLI parity covers their use cases.
-   - [Pending] Audit other deployment helpers (Pinokio, one-click installers) and drop UI-only tooling.
-
-6. **Documentation sweep**
-   - [Done] Rewrite `README.md`, `docs/CLI.md`, and related guides to describe the CLI-only workflow.
-   - [In Progress] Keep this file (`PROJECT_PLAN_LIVE.md`) updated with each removal so future contributors know what was intentionally dropped.
-
-### Deferred structural cleanup
-- After the repo is fully headless, plan a follow-up migration that relocates `models/`, `preprocessing/`, `postprocessing/`, `shared/`, and other generation resources under `core/` to match the new Production Manager–centric layout.
+**Deferred**
+- After the headless milestones land, reorganise `models/`, `preprocessing/`, `postprocessing/`, and `shared/` under a Production Manager–centric layout (tracked in `docs/CONTEXT.md`).
 
 ---
 
@@ -115,6 +66,8 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 - Remove finished tasks from `## Immediate Next Actions`.
 - Add follow-up tasks or new task derived from the roadmap/objective to `## Immediate Next Actions` in proper order; 
 - Keep `## Immediate Next Actions` as a concise, timeless checklist.
-- Audit `## Project Roadmap` and `## Validation Expectations`; update `docs/APPENDIX_HEADLESS.md` and `docs/CLI.md` as work lands.
+- Audit and prune `## Project Roadmap`, cleaning up stale milestones.
+- Review `## Validation Expectations` and update as needed.
+- Update `docs/APPENDIX_HEADLESS.md` and `docs/CLI.md` for changes.
 - Record deeper notes, learnings, and observations in `docs/CONTEXT.md`; prune stale entries.
 - Keep `PROJECT_PLAN_LIVE.md` clear, consistent, and easy for future agents to follow.
