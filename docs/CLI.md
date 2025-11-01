@@ -31,6 +31,7 @@ python -m cli.generate \
 - `--prompt-enhancer-provider {llama3_2,joycaption}` – pick which backend to load when the enhancer is active. Defaults to `llama3_2`; requires `--prompt-enhancer`. Like other runtime toggles this selection is per-run unless written into `wgp_config.json` manually.
 - Prompt enhancer priming is mediated by `core.prompt_enhancer.bridge.PromptEnhancerBridge`; the bridge caches loaded models per server configuration so repeat runs avoid gratuitous reloads. Pass `--reset-prompt-enhancer` when you need to flush the cache (and unload the enhancer models) before a run.
 - Metadata snapshots include `adapter_payloads["prompt_enhancer"]` describing the selected mode/provider so queue workers and post-processing tools can reconstruct enhancer state without re-reading `wgp` globals.
+- Queue entries and saved task metadata now persist the computed `enhanced_prompt` alongside the enhancer payload; automated smoke coverage exercises the queue controller to guard this propagation path.
 - `--seed INT` – fixed seed for deterministic runs. Use `-1` to request a random seed from the pipeline.
 - `--force-fps {auto,control,source,INT}` – override the output frame rate or reuse preset behaviour.
 
@@ -79,7 +80,7 @@ Every path must reference an existing file; the CLI validates before execution.
 - `--text-encoder-quantization TEXT` – override text encoder quantisation.
 - `--tea-cache-level FLOAT` – enable TeaCache skipping with the provided multiplier (>0).
 - `--tea-cache-start-perc FLOAT` – start TeaCache skipping at the provided percentage of the denoising schedule. Requires `--tea-cache-level`.
-- `--save-masks` / `--no-save-masks` – mirror the legacy “save masks” toggle so CLI runs can persist or skip intermediate mask exports for the current execution only (defaults fall back to stored preferences).
+- `--save-masks` / `--no-save-masks` – mirror the legacy “save masks” toggle so CLI runs can persist or skip intermediate mask exports for the current execution only (defaults fall back to stored preferences). The toggle now also governs RGBA ZIP archives emitted from BGRA mask frames via the shared media context.
 - `--save-quantized` / `--no-save-quantized` – control whether freshly quantised transformer weights are written back to disk after generation (current run only).
 - `--save-speakers` / `--no-save-speakers` – enable or disable persistence of extracted speaker tracks used by MMAudio/Chatterbox flows (current run only).
 - `--check-loras` / `--no-check-loras` – force a pre-flight audit of LoRA files (exiting early on missing assets) or bypass the check even when stored defaults enable it; changes apply to the active run only.
@@ -155,5 +156,7 @@ Successful runs log the written file paths and echo them to STDOUT. Expect:
 - Foreground MP4 (`<prefix>.mp4`)
 - Alpha MP4 (`<prefix>_alpha.mp4`)
 - Optional RGBA ZIP archive when `--mask-type alpha` is selected.
+
+All persistence flows through `core.io.media.MediaPersistenceContext`: video and image saves reuse the configured codecs, audio-only runs emit `.wav` files with the resolved sample rate, and mask archives honour the `--save-masks` flag. Failures are retried with logger feedback so automation can detect and react to IO issues deterministically.
 
 For architectural notes and migration history consult `PROJECT_PLAN_LIVE.md`. External scripts may reuse the bootstrap directly via `import wgp; wgp.ensure_runtime_initialized()` before calling lower level helpers.

@@ -4,12 +4,14 @@ from pathlib import Path
 from typing import Optional, Union
 
 from .media import (
+    AudioSaveConfig,
     MediaPersistenceContext,
     build_metadata_config,
     build_media_context,
     clone_metadata_config,
     default_metadata_config_templates,
     ImageSaveConfig,
+    MaskSaveConfig,
     MetadataSaveConfig,
     VideoSaveConfig,
     write_image,
@@ -55,7 +57,9 @@ def get_available_filename(
 
 
 __all__ = [
+    "AudioSaveConfig",
     "ImageSaveConfig",
+    "MaskSaveConfig",
     "MediaPersistenceContext",
     "MetadataSaveConfig",
     "VideoSaveConfig",

@@ -60,6 +60,7 @@ from shared.utils.utils import truncate_for_filesystem, sanitize_file_name, proc
 from shared.utils.process_locks import acquire_GPU_ressources, get_gen_info, release_GPU_ressources, gen_lock
 from core.io import get_available_filename
 from core.io.media import (
+    AudioSaveConfig,
     ImageSaveConfig,
     MetadataSaveConfig,
     VideoSaveConfig,
@@ -2920,6 +2921,18 @@ def generate_video(
             setattr(config, key, value)
         return config
 
+    def resolve_audio_config(**overrides: Any) -> AudioSaveConfig:
+        context = media_context
+        if context is not None and hasattr(context, "audio_config"):
+            try:
+                return context.audio_config(**overrides)
+            except AttributeError:
+                pass
+        config = AudioSaveConfig()
+        for key, value in overrides.items():
+            setattr(config, key, value)
+        return config
+
     def should_save_debug_masks() -> bool:
         context = media_context
         if context is not None and hasattr(context, "should_save_masks"):
@@ -2993,6 +3006,128 @@ def generate_video(
             config=effective_config,
             logger=logger,
         )
+
+    def _save_audio_artifact(
+        data,
+        target_path,
+        *,
+        sample_rate: Optional[int],
+        config: Optional[AudioSaveConfig] = None,
+        overrides: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        logger = get_notifications_logger()
+        context = media_context
+        if context is not None and hasattr(context, "save_audio"):
+            try:
+                return context.save_audio(
+                    data,
+                    target_path,
+                    sample_rate=sample_rate,
+                    logger=logger,
+                    config=config,
+                    overrides=overrides,
+                )
+            except AttributeError:
+                pass
+
+        effective_config = config
+        if effective_config is None:
+            override_kwargs = dict(overrides or {})
+            effective_config = resolve_audio_config(**override_kwargs)
+        else:
+            effective_config = AudioSaveConfig(
+                sample_rate=config.sample_rate,
+                subtype=config.subtype,
+                format=config.format,
+                retry=config.retry,
+                extra_params=dict(config.extra_params),
+            )
+            if overrides:
+                for key, value in overrides.items():
+                    setattr(effective_config, key, value)
+
+        resolved_sample_rate = sample_rate if sample_rate is not None else effective_config.sample_rate
+        if resolved_sample_rate is None:
+            if logger is not None and hasattr(logger, "warning"):
+                logger.warning("Audio sample rate missing; skipping save for %s", target_path)
+            return target_path
+
+        try:
+            import soundfile as sf
+        except ImportError:
+            if logger is not None and hasattr(logger, "warning"):
+                logger.warning("soundfile unavailable; skipping audio save for %s", target_path)
+            return target_path
+
+        if torch.is_tensor(data):
+            array = data.detach().cpu().numpy()
+        else:
+            array = np.asarray(data)
+
+        error: Optional[Exception] = None
+        for attempt in range(1, effective_config.retry + 1):
+            try:
+                sf.write(
+                    target_path,
+                    array,
+                    resolved_sample_rate,
+                    subtype=effective_config.subtype,
+                    format=effective_config.format,
+                    **effective_config.extra_params,
+                )
+                return target_path
+            except Exception as exc:  # pragma: no cover - dependent on codec availability
+                error = exc
+                if logger is not None and hasattr(logger, "warning"):
+                    logger.warning(
+                        "Audio save attempt %s/%s failed for %s: %s",
+                        attempt,
+                        effective_config.retry,
+                        target_path,
+                        exc,
+                    )
+
+        if logger is not None and hasattr(logger, "error"):
+            logger.error("Audio save exhausted retries for %s: %s", target_path, error)
+        return target_path
+
+    def _save_mask_archive(
+        frames,
+        base_output_path,
+        *,
+        force: bool = False,
+    ) -> Optional[str]:
+        archive_path = os.path.splitext(base_output_path)[0] + ".zip"
+        logger = get_notifications_logger()
+        context = media_context
+        if context is not None and hasattr(context, "save_mask_archive"):
+            try:
+                return context.save_mask_archive(
+                    frames,
+                    archive_path,
+                    logger=logger,
+                    force=force,
+                )
+            except AttributeError:
+                pass
+
+        if not force and not should_save_debug_masks():
+            return None
+
+        try:
+            from models.wan.alpha.utils import write_zip_file
+        except ImportError:
+            if logger is not None and hasattr(logger, "warning"):
+                logger.warning("Mask archive writer unavailable; skipping ZIP save for %s", archive_path)
+            return None
+
+        try:
+            write_zip_file(archive_path, frames)
+            return archive_path
+        except Exception as exc:  # pragma: no cover - dependent on ZIP helper
+            if logger is not None and hasattr(logger, "warning"):
+                logger.warning("Mask archive save failed for %s: %s", archive_path, exc)
+            return None
 
     torch.set_grad_enabled(False) 
     if mode.startswith("edit_"):
@@ -3940,17 +4075,21 @@ def generate_video(
                 video_path = os.path.join(save_path, file_name)
                 any_mmaudio = MMAudio_setting != 0 and server_config.get("mmaudio_enabled", 0) != 0 and sample.shape[1] >=fps
                 if BGRA_frames is not None:
-                    from models.wan.alpha.utils import write_zip_file
-                    write_zip_file(os.path.splitext(video_path)[0] + ".zip", BGRA_frames)
+                    _save_mask_archive(
+                        BGRA_frames,
+                        video_path,
+                    )
                     BGRA_frames = None 
                 video_config_for_outputs: Optional[VideoSaveConfig] = None
                 image_config_for_outputs: Optional[ImageSaveConfig] = None
 
                 if audio_only:
-                    import soundfile as sf
                     audio_path = os.path.join(image_save_path, file_name)
-                    sf.write(audio_path, sample.squeeze(0), wan_model.sr)
-                    video_path= audio_path                      
+                    video_path = _save_audio_artifact(
+                        sample.squeeze(0),
+                        audio_path,
+                        sample_rate=getattr(wan_model, "sr", None),
+                    )
                 elif is_image:    
                     image_path = os.path.join(image_save_path, file_name)
                     sample =  sample.transpose(1,0)  #c f h w -> f c h w 
@@ -3997,9 +4136,12 @@ def generate_video(
                         output_new_audio_filepath = audio_source
                         new_audio_added_from_audio_start =  True
                     elif output_new_audio_data is not None:
-                        import soundfile as sf
                         output_new_audio_filepath = output_new_audio_temp_filepath = get_available_filename(save_path, f"tmp{time_flag}.wav" )
-                        sf.write(output_new_audio_filepath, output_new_audio_data, audio_sampling_rate)                       
+                        _save_audio_artifact(
+                            output_new_audio_data,
+                            output_new_audio_filepath,
+                            sample_rate=audio_sampling_rate,
+                        )
                     if output_new_audio_filepath is not None:
                         new_audio_tracks = [output_new_audio_filepath]
                     else:

@@ -14,18 +14,20 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 - [Pending] Decide whether any gallery/media normalisation helpers should be salvaged into CLI utilities or deleted. (Prior plugin-removal phases are archived in `docs/WORK_HISTORY.md`.)
 
 **Milestone 2 – Finish Production Manager extraction (Active)**
-- [In Progress] Replace `wgp.generate_video` persistence paths with `MediaPersistenceContext` helpers supplied by `ProductionManager`.
+- [Completed] Replace `wgp.generate_video` persistence paths with `MediaPersistenceContext` helpers supplied by `ProductionManager`.
 - [Planned] Lift prompt-enhancer and LoRA orchestration into dedicated adapters so CLI flows depend on `ProductionManager` instead of `wgp`. Dependency details live in `docs/CONTEXT.md` (“ProductionManager Dependency Snapshot”).
 - [Planned] Continue peeling residual runtime globals (model load/release, queue callbacks) listed in `docs/CONTEXT.md`.
 
 **Milestone 3 – Harden CLI orchestration (Active)**
 - [In Progress] Keep queue management under `cli/` while retiring legacy shims; move any remaining helpers out of `core/`.
 - [Planned] Finish disk-first workflows for mask/voice pipelines and document validation expectations for each CLI entrypoint.
+- [Planned] Emit a machine-readable artifact manifest from `cli.generate` capturing saved paths, metadata mode, and adapter payload hashes.
 
 **Milestone 4 – Prune GUI-dependent tooling (Ongoing)**
 - [In Progress] Audit preprocessing utilities for GUI assumptions and refactor or remove as needed.
 - [Pending] Gate or retire models that still require interactive inputs.
 - [Planned] Extract the prompt enhancer stack into a shared module and stand up a provider abstraction for local/cloud backends.
+- [Planned] Thread `MediaPersistenceContext` through MatAnyOne so preprocessing mask/audio exports mirror the headless generation pipeline.
 
 **Milestone 5 – Retire ancillary runtimes (Pending)**
 - [Pending] Remove Docker scripts and legacy launch docs once CLI parity is confirmed.
@@ -48,9 +50,15 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ---
 
 ## Immediate Next Actions
-- Route residual audio/mask persistence paths in `wgp.generate_video` through context-managed helpers to finish IO parity.
-- Extend CLI/headless docs with the new prompt enhancer payload handoff and media-context persistence expectations.
-- Add queue/CLI smoke coverage that asserts enhanced prompt payloads propagate into metadata snapshots and saved tasks.
+- Port MatAnyOne mask/audio writers to the shared `MediaPersistenceContext` so preprocessing artefacts respect codec overrides and the `save_masks` toggle.
+  - **Proposal (2025-11-04)**: Thread the per-run media context through `cli.matanyone` and replace direct `save_image`/ZIP calls with `_save_*_artifact` helpers, mirroring the main generation path.
+  - **Rationale**: Keeps preprocessing outputs aligned with the headless persistence pipeline, preventing drift between mask/audio artefacts produced by generation and MatAnyOne.
+- Define a lightweight artifact manifest spec for CLI runs (JSONL or per-run summary) that captures saved paths, metadata mode, and adapter payload hashes.
+  - **Proposal (2025-11-04)**: Draft a minimal schema, prototype emission in dry-run mode, and socialise with operators before wiring into `cli.generate`.
+  - **Rationale**: Replaces ad-hoc logging with machine-readable manifests, improving reproducibility audits and integration with external schedulers.
+- Plan the removal of legacy `save_video`/`save_image` wrappers once all call sites use `MediaPersistenceContext`.
+  - **Proposal (2025-11-04)**: Audit remaining usages, enumerate blockers, and sketch a deprecation timeline so the wrappers can disappear when the runner extraction lands.
+  - **Rationale**: Eliminating the wrappers reduces duplication, making the context the single persistence surface and simplifying future refactors.
 
 ---
 

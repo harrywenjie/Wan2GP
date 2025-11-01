@@ -9,9 +9,15 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple, Union
 
 import imageio
+import numpy as np
 import torch
 from PIL import Image
 from torchvision.utils import make_grid, save_image as torchvision_save_image
+
+try:  # pragma: no cover - optional dependency; exercised in integration
+    import soundfile as sf
+except ImportError:  # pragma: no cover - dependency handling
+    sf = None  # type: ignore[assignment]
 
 LoggerCallable = Union[Callable[[str], None], logging.Logger]
 MetadataHandler = Callable[[str, Dict[str, Any], Dict[str, Any]], bool]
@@ -71,6 +77,25 @@ class ImageSaveConfig:
 
 
 @dataclass
+class AudioSaveConfig:
+    """Configuration payload for audio persistence."""
+
+    sample_rate: Optional[int] = None
+    subtype: Optional[str] = None
+    format: Optional[str] = None
+    retry: int = 5
+    extra_params: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class MaskSaveConfig:
+    """Configuration payload for mask archive persistence."""
+
+    retry: int = 3
+    extra_params: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class MetadataSaveConfig:
     """Configuration payload for metadata persistence."""
 
@@ -86,13 +111,17 @@ class MediaPersistenceContext:
 
     Callers clone the stored config templates through ``video_config`` /
     ``image_config`` so each save operation receives an isolated dataclass
-    instance. ``save_debug_masks`` mirrors the legacy ``save_masks`` flag on
+    instance. Audio and mask helpers follow the same pattern so queue/CLI
+    orchestration can persist every artifact through a single context.
+    ``save_debug_masks`` mirrors the legacy ``save_masks`` flag on
     ``server_config`` and allows the runner to decide whether mask previews
     should be persisted for inspection.
     """
 
     video_template: VideoSaveConfig
     image_template: ImageSaveConfig
+    audio_template: AudioSaveConfig = field(default_factory=AudioSaveConfig)
+    mask_template: MaskSaveConfig = field(default_factory=MaskSaveConfig)
     save_debug_masks: bool = False
 
     def video_config(self, **overrides: Any) -> VideoSaveConfig:
@@ -122,6 +151,36 @@ class MediaPersistenceContext:
             for key, value in overrides.items():
                 if key not in fields:
                     raise AttributeError(f"ImageSaveConfig has no field named '{key}'")
+                setattr(config, key, value)
+        return config
+
+    def audio_config(self, **overrides: Any) -> AudioSaveConfig:
+        """
+        Return a copy of the audio template with optional field overrides.
+        """
+
+        config = replace(self.audio_template)
+        config.extra_params = dict(self.audio_template.extra_params)
+        if overrides:
+            fields = config.__dataclass_fields__
+            for key, value in overrides.items():
+                if key not in fields:
+                    raise AttributeError(f"AudioSaveConfig has no field named '{key}'")
+                setattr(config, key, value)
+        return config
+
+    def mask_config(self, **overrides: Any) -> MaskSaveConfig:
+        """
+        Return a copy of the mask template with optional field overrides.
+        """
+
+        config = replace(self.mask_template)
+        config.extra_params = dict(self.mask_template.extra_params)
+        if overrides:
+            fields = config.__dataclass_fields__
+            for key, value in overrides.items():
+                if key not in fields:
+                    raise AttributeError(f"MaskSaveConfig has no field named '{key}'")
                 setattr(config, key, value)
         return config
 
@@ -186,6 +245,127 @@ class MediaPersistenceContext:
                     setattr(effective_config, key, value)
         return write_image(data, target_path, config=effective_config, logger=logger)
 
+    @staticmethod
+    def _coerce_audio_array(data: Any) -> np.ndarray:
+        """
+        Convert supported audio inputs into a numpy array suitable for soundfile.
+        """
+
+        if torch.is_tensor(data):
+            return data.detach().cpu().numpy()
+        if isinstance(data, np.ndarray):
+            return data
+        return np.asarray(data)
+
+    def save_audio(
+        self,
+        data: Any,
+        target_path: str,
+        *,
+        sample_rate: Optional[int] = None,
+        logger: Optional[LoggerCallable] = None,
+        config: Optional[AudioSaveConfig] = None,
+        overrides: Optional[Mapping[str, Any]] = None,
+    ) -> str:
+        """
+        Persist an audio artifact using either the provided config or template overrides.
+        """
+
+        if sf is None:  # pragma: no cover - dependent on optional package
+            raise RuntimeError("soundfile dependency is required to persist audio artifacts.")
+
+        effective_config: AudioSaveConfig
+        if config is None:
+            effective_config = self.audio_config(**dict(overrides or {}))
+        else:
+            effective_config = replace(config)
+            effective_config.extra_params = dict(config.extra_params)
+            if overrides:
+                fields = effective_config.__dataclass_fields__
+                for key, value in overrides.items():
+                    if key not in fields:
+                        raise AttributeError(f"AudioSaveConfig has no field named '{key}'")
+                    setattr(effective_config, key, value)
+
+        resolved_sample_rate = sample_rate if sample_rate is not None else effective_config.sample_rate
+        if resolved_sample_rate is None:
+            raise ValueError("save_audio requires a sample rate via argument or AudioSaveConfig.sample_rate")
+
+        array = self._coerce_audio_array(data)
+        error: Optional[Exception] = None
+        for attempt in range(1, effective_config.retry + 1):
+            try:
+                sf.write(
+                    target_path,
+                    array,
+                    resolved_sample_rate,
+                    subtype=effective_config.subtype,
+                    format=effective_config.format,
+                    **effective_config.extra_params,
+                )
+                return target_path
+            except Exception as exc:  # pragma: no cover - dependent on codec availability
+                error = exc
+                _emit(
+                    logger,
+                    f"save_audio attempt {attempt}/{effective_config.retry} failed for {target_path}: {exc}",
+                    level="warning",
+                )
+
+        _emit(logger, f"save_audio exhausted retries for {target_path}: {error}", level="error")
+        return target_path
+
+    def save_mask_archive(
+        self,
+        frames: Any,
+        target_path: str,
+        *,
+        logger: Optional[LoggerCallable] = None,
+        config: Optional[MaskSaveConfig] = None,
+        overrides: Optional[Mapping[str, Any]] = None,
+        force: bool = False,
+    ) -> Optional[str]:
+        """
+        Persist a mask archive (typically RGBA frames) when mask saving is enabled.
+        """
+
+        if frames is None:
+            return None
+        if not force and not self.should_save_masks():
+            _emit(logger, f"save_mask_archive skipped for {target_path}; mask persistence disabled.", level="info")
+            return None
+
+        effective_config: MaskSaveConfig
+        if config is None:
+            effective_config = self.mask_config(**dict(overrides or {}))
+        else:
+            effective_config = replace(config)
+            effective_config.extra_params = dict(config.extra_params)
+            if overrides:
+                fields = effective_config.__dataclass_fields__
+                for key, value in overrides.items():
+                    if key not in fields:
+                        raise AttributeError(f"MaskSaveConfig has no field named '{key}'")
+                    setattr(effective_config, key, value)
+
+        error: Optional[Exception] = None
+        for attempt in range(1, effective_config.retry + 1):
+            try:
+                from models.wan.alpha.utils import write_zip_file
+
+                write_zip_file(target_path, frames, **effective_config.extra_params)
+                return target_path
+            except Exception as exc:  # pragma: no cover - dependent on optional deps
+                error = exc
+                _emit(
+                    logger,
+                    f"save_mask_archive attempt {attempt}/{effective_config.retry} failed for {target_path}: {exc}",
+                    level="warning",
+                )
+
+        _emit(logger, f"save_mask_archive exhausted retries for {target_path}: {error}", level="error")
+        return None
+
 
 def build_media_context(server_config: Mapping[str, Any]) -> MediaPersistenceContext:
     """
@@ -199,10 +379,31 @@ def build_media_context(server_config: Mapping[str, Any]) -> MediaPersistenceCon
     image_template = ImageSaveConfig(
         quality=server_config.get("image_output_codec"),
     )
+    raw_audio_rate = server_config.get("audio_sample_rate")
+    audio_sample_rate: Optional[int]
+    try:
+        audio_sample_rate = int(raw_audio_rate) if raw_audio_rate is not None else None
+    except (TypeError, ValueError):
+        audio_sample_rate = None
+    audio_template = AudioSaveConfig(
+        sample_rate=audio_sample_rate,
+        subtype=server_config.get("audio_output_subtype"),
+        format=server_config.get("audio_output_format"),
+    )
+    raw_mask_retry = server_config.get("mask_archive_retry")
+    mask_retry = MaskSaveConfig().retry
+    if raw_mask_retry is not None:
+        try:
+            mask_retry = max(1, int(raw_mask_retry))
+        except (TypeError, ValueError):
+            mask_retry = MaskSaveConfig().retry
+    mask_template = MaskSaveConfig(retry=mask_retry)
     save_debug_masks = bool(server_config.get("save_masks", False))
     return MediaPersistenceContext(
         video_template=video_template,
         image_template=image_template,
+        audio_template=audio_template,
+        mask_template=mask_template,
         save_debug_masks=save_debug_masks,
     )
 
@@ -538,11 +739,16 @@ def _default_metadata_handlers() -> Dict[str, MetadataHandler]:
 
 
 __all__ = [
+    "AudioSaveConfig",
     "ImageSaveConfig",
+    "MaskSaveConfig",
     "MediaPersistenceContext",
     "MetadataSaveConfig",
     "VideoSaveConfig",
     "build_media_context",
+    "build_metadata_config",
+    "clone_metadata_config",
+    "default_metadata_config_templates",
     "write_image",
     "write_metadata_bundle",
     "write_video",

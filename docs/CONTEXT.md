@@ -3,7 +3,7 @@
 ## Orchestration & Queue
 
 - `wgp.py` still executes the core generation path. The CLI reaches it through `core.production_manager.ProductionManager.run_generation()`, which handles notifier injection, metadata wiring, and model reload checks before delegating to `wgp.generate_video()`.
-- `cli.queue_controller.QueueController` is the primary queue runner (AsyncStream-backed). It owns abort/pause handling, drains queued tasks sequentially, and surfaces pause/resume/status/abort over the optional TCP control server (`cli.queue_control_server` + `cli.queue_control`).
+- `cli.queue_controller.QueueController` is the primary queue runner (AsyncStream-backed). It owns abort/pause handling, drains queued tasks sequentially, and surfaces pause/resume/status/abort over the optional TCP control server (`cli.queue_control_server` + `cli.queue_control`). `tests/test_queue_prompt_payloads.py` locks in the enhanced prompt payload propagation path so queue snapshots keep the metadata required by downstream automation.
 - Queue state lives under `cli.queue_state.QueueStateTracker`. Helper functions for queue summaries, abort/clear toggles, and counter resets live in `cli.queue_utils` / `cli.queue_state`, with `wgp.clear_queue_action` maintained only for legacy compatibility.
 - `cli.runner` provides the CLI notifier (`CLIGenerationNotifier`), progress callback builder, and `send_cmd` bridge so telemetry updates stay in sync with `state["gen"]`. `cli.generate` traps `KeyboardInterrupt` and clears the queue via these helpers.
 
@@ -18,7 +18,7 @@
 - `ProductionManager.metadata_state()` returns a per-run `MetadataState` snapshot (choice + cloned templates). `GenerationRuntime` forwards the snapshot to `wgp.generate_video`, replacing the old module-level `metadata_choice` / `metadata_configs`.
 - `_resolve_metadata_config` accepts either the dataclass or a dict for backward compatibility. CLI runs still honour `--metadata-mode`; MatAnyOne now passes the cloned `MetadataState` snapshot directly into its writers so embedded metadata and JSON sidecars stay aligned with the core generation pipeline.
 - Embedded source images for metadata remain gated by `server_config["embed_source_images"]`; JSON sidecars are emitted when `metadata_mode=json`.
-- `core.io.media.MediaPersistenceContext` now captures the video/image persistence templates plus the legacy `save_masks` debug toggle. `ProductionManager.media_context()` builds a fresh instance from `server_config` for each run and passes it through `GenerationRuntime` to `wgp.generate_video`, which now routes video/image saves through the context helpers while retaining the legacy wrappers as a fallback.
+- `core.io.media.MediaPersistenceContext` now captures the video/image/audio/mask persistence templates plus the legacy `save_masks` debug toggle. `ProductionManager.media_context()` builds a fresh instance from `server_config` for each run and passes it through `GenerationRuntime` to `wgp.generate_video`, which routes saves through the context helpers while retaining the legacy wrappers as a fallback.
 
 ## Pending Extraction Work
 
@@ -50,4 +50,4 @@
 
 - Runtime prep: relies on `wgp` for `wan_model`, `transformer_type`, `reload_needed`, and `load_models` to hydrate models on demand. Prompt enhancement sequences are expected to arrive via `adapter_payloads["prompt_enhancer"]`, allowing the legacy module to avoid touching enhancer globals during execution.
 - Task inputs: still call through `wgp` helpers for model metadata (`get_model_record`, `get_model_family`, compatibility testers), settings writers, notifications, and the shared `lock`.
-- Output persistence: `MediaPersistenceContext.save_video/save_image` now cover the legacy save sites while still leaning on `wgp` for filename allocation and a few inline helpers pending full extraction.
+- Output persistence: `MediaPersistenceContext.save_video/save_image/save_audio/save_mask_archive` cover the legacy save sites while still leaning on `wgp` for filename allocation and a few inline helpers pending full extraction. Audio-only runs now save through `_save_audio_artifact` (wrapping `soundfile`) and RGBA mask archives respect the `save_masks` toggle.
