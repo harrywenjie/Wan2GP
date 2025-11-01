@@ -1,9 +1,11 @@
 # Project Plan Live
 
 ## Objective
-Transition **Wan2GP** from a Gradio-centric application into a **lightweight, headless CLI tool** focused solely on core video-generation workflows.  
-All removals or refactors must preserve reproducibility, deterministic generation paths, and stable GPU resource management.  
-The headless build never exposes GUI-driven affordances — video/audio playback, galleries, or interactive widgets must be removed entirely; only on-disk artifacts remain supported.
+- Transition **Wan2GP** from a Gradio-centric application into a **lightweight, headless CLI tool** focused solely on core video-generation workflows.  
+- All actions should move the codebase toward minimalism, reproducibility, and deterministic CLI operation. 
+- Ensure all modules run cleanly **without** environment variables or assumptions from the legacy UI layer.
+- When refactoring or removing code, preserve debuggability through logging.
+- The headless build never exposes GUI-driven affordances — video/audio playback, galleries, or interactive widgets must be removed entirely; only on-disk artifacts remain supported.
 
 ---
 
