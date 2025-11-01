@@ -69,6 +69,7 @@ class _QueueControlTCPServer(socketserver.ThreadingTCPServer):
                 "abort": bool(gen.get("abort")),
                 "queue_length": metrics.get("queue_length"),
                 "queue_summary": metrics.get("queue_summary"),
+                "audio_tracks": metrics.get("audio_tracks"),
                 "progress_status": gen.get("progress_status"),
                 "process_status": gen.get("process_status"),
             }

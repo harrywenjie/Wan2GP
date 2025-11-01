@@ -91,6 +91,7 @@ Every path must reference an existing file; the CLI validates before execution.
 - `--dry-run` – resolve configuration, print the derived parameters, and exit without generating frames. Use this to validate arguments, file discovery, and preset merges.
 - `--control-port INT` – expose a lightweight TCP control server that accepts pause/resume/status commands while the queue controller is running.
 - `--control-host TEXT` – host/interface bound by the TCP control server (defaults to `127.0.0.1`; change with care if remote access is required).
+- Queue summaries now append an `Audio tracks` block whenever persisted metadata is available. Each line mirrors the `status` payload, listing `path`, `sample_rate`, `duration_s`, `language`, and `channels` so headless monitors can confirm mux compatibility at a glance.
 
 ### Execution Flow
 1. The CLI parser gathers arguments (see `cli/arguments.py`).
@@ -129,7 +130,7 @@ The manifest writer must flush the JSON line only after persistence succeeds. Dr
 
 ### Queue Control
 - Start the controller with `--control-port` to expose a local TCP endpoint (default host `127.0.0.1`). The CLI logs the active port once the listener is ready.
-- Use `python -m cli.queue_control --port <PORT> pause` to pause the active generation, `resume` to continue, and `status` to retrieve a JSON summary (paused state, in-progress flag, queue length, and last progress status). `abort` signals an abort request.
+- Use `python -m cli.queue_control --port <PORT> pause` to pause the active generation, `resume` to continue, and `status` to retrieve a JSON summary. The payload now includes `paused`, `in_progress`, `abort`, `queue_length`, `queue_summary`, `progress_status`, `process_status`, and (when audio tracks were persisted) an `audio_tracks` array. Each audio entry surfaces `path`, `sample_rate`, `duration_s`, `language`, and `channels` so automations can preflight mux requirements without re-reading manifests. `abort` signals an abort request.
 - The control channel is intentionally simple: single-line commands, single-line responses. Communication is unencrypted; keep the listener bound to loopback unless you front it with your own secure tunnel.
 
 ## MatAnyOne Mask Propagation (`cli.matanyone`)

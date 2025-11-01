@@ -74,7 +74,11 @@ class QueueController:
         return seed
 
     def _update_queue_tracking(self, queue: List[Dict[str, Any]]) -> None:
-        update_queue_tracking(queue, self._queue_tracker)
+        gen_state = self._state.get("gen") if isinstance(self._state, dict) else None
+        audio_tracks = None
+        if isinstance(gen_state, dict):
+            audio_tracks = gen_state.get("audio_tracks")
+        update_queue_tracking(queue, self._queue_tracker, audio_tracks=audio_tracks)
 
     def queue_metrics(self) -> Dict[str, Any]:
         return self._queue_tracker.metrics()
@@ -320,6 +324,10 @@ class QueueController:
         adapter_payloads = task.get("adapter_payloads")
         if adapter_payloads is None and isinstance(metadata, dict):
             adapter_payloads = metadata.get("adapter_payloads")
+
+        with gen_lock:
+            gen_state = self._state.setdefault("gen", {})
+            gen_state.pop("audio_tracks", None)
 
         def worker() -> None:
             try:

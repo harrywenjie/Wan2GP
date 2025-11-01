@@ -31,6 +31,7 @@
 - [Completed] Added MatAnyOne CLI manifest integration smoke coverage verifying `mask_foreground`, `mask_alpha`, and `rgba_archive` roles (2025-11-02).
 - [Completed] Persisted MatAnyOne audio tracks through `MediaPersistenceContext.save_audio`, wiring decoded artifacts into manifests and metadata sidecars (2025-11-02).
 - [Completed] Surfaced MatAnyOne audio artifact metadata (sample rate, duration, language, channels) through CLI logging and manifest entries for downstream automation (2025-11-02).
+- [Completed] Queue summaries and control-server status payloads now expose MatAnyOne audio metadata (`audio_tracks`) for orchestration clients (2025-11-02).
 - [Planned] Finish disk-first workflows for mask/voice pipelines and document validation expectations for each CLI entrypoint.
 - [Planned] Emit a machine-readable artifact manifest from `cli.generate` capturing saved paths, metadata mode, and adapter payload hashes.
 
@@ -70,10 +71,10 @@
 ---
 
 ## Immediate Next Actions
-- Surface MatAnyOne audio metadata through queue summaries and schema references so automation can consume it without reading manifests.
-  - **Proposal (2025-11-02)**: Extend `cli.queue_state.QueueStateTracker` and CLI status endpoints to emit `audio_tracks` entries (path, sample_rate, duration_s, language, channels) while updating `docs/CLI.md`/schema snippets to match.
-  - **Rationale**: Runs now persist and log canonical audio metadata; exposing the same details via queue/status APIs lets orchestration layers preflight mux compatibility before artifacts land on disk.
-  - **Design (2025-11-02)**: Add optional `audio_tracks` blocks to queue summaries, document the schema update, and add focused tests that stub MatAnyOne runs to assert the new fields propagate.
+- Backfill queue-control smoke coverage for the new `audio_tracks` telemetry so the TCP status endpoint stays in lock-step with queue metrics.
+  - **Proposal (2025-11-02)**: Extend `cli.queue_controller_smoke` (or add a focused test) to stub `state["gen"]["audio_tracks"]`, invoke `cli.queue_control status`, and assert the JSON payload plus textual summary surface the expected keys/values.
+  - **Rationale**: Unit coverage exercises the tracker, but we still need an end-to-end assertion that the control channel relays audio metadata for orchestration clients.
+  - **Design (2025-11-02)**: Patch the smoke harness to inject sample audio entries, capture the CLI response, and compare against a minimal schema (`path`, `sample_rate`, `duration_s`, `language`, `channels`).
 - Sweep remaining preprocessing/generation modules for direct `imageio` writers and schedule migrations onto `core.io.media`.
   - **Proposal (2025-11-02)**: Use `rg` to catalogue outstanding `imageio.get_writer` usage (e.g. `preprocessing/dwpose`, `models/ltx_video`), prioritise high-traffic pipelines, and plan incremental refactors that reuse shared Video/Image save configs.
   - **Rationale**: Unifying persistence on the context layer keeps retry/logging semantics consistent and prevents regressions as codec overrides evolve.

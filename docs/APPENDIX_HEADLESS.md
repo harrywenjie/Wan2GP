@@ -71,6 +71,7 @@ Runtime bootstrap now lives in `wgp.initialize_runtime()`, which loads `wgp_conf
 ## Queue Control Harness
 - `cli.queue_controller.QueueController` is the default queue orchestrator; the legacy `wgp.process_tasks` loop has been removed along with the `--legacy-queue` escape hatch.
 - Shared queue helpers (`clear_queue_action`, `generate_queue_summary`, `update_queue_data`) live in `cli.queue_utils`, keeping the CLI controller and `wgp` wrapper aligned.
+- Queue trackers normalise MatAnyOne audio metadata into `state['gen']['audio_tracks']`, exposing the same fields (`path`, `sample_rate`, `duration_s`, `language`, `channels`) through both textual summaries and the TCP `status` payload. Automation layers can now decide on mux rules without opening manifest sidecars.
 - `cli.queue_controller_smoke.run_smoke()` now provisions a temporary `QueueControlServer`, drives the pause/resume/status commands over TCP, and asserts the queue controller returns to the active state; keep this harness in the CI smoke suite to guard the control channel.
 - Default bindings intentionally stay on `127.0.0.1`; only expose the control port beyond loopback when you can wrap it with SSH tunnels or other authenticated transport.
 - Use `cli.queue_control.send_command()` (or the CLI wrapper) to script operational checks or to integrate the control port into higher-level automation once Celery workers are in play.

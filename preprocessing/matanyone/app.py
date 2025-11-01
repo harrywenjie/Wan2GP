@@ -204,6 +204,8 @@ def generate_masks(state: Optional[Dict], request: MatAnyOneRequest) -> MatAnyOn
         rgba_frames=rgba_frames,
     )
 
+    _store_audio_tracks_in_state(state, result.metadata.get("audio_tracks"))
+
     return result
 
 
@@ -834,3 +836,56 @@ def _save_outputs(
         fps=fps,
         metadata=metadata,
     )
+
+
+def _store_audio_tracks_in_state(
+    state: Optional[Dict[str, Any]],
+    audio_tracks: Optional[Sequence[Mapping[str, object]]],
+) -> None:
+    if not isinstance(state, dict):
+        return
+    gen_state = state.setdefault("gen", {})
+    normalised: List[Dict[str, Any]] = []
+    if audio_tracks:
+        for entry in audio_tracks:
+            if not isinstance(entry, Mapping):
+                continue
+            path_value = entry.get("path")
+            if not path_value:
+                continue
+            try:
+                path_text = str(path_value)
+            except Exception:
+                continue
+            sample_rate_value = entry.get("sample_rate")
+            try:
+                sample_rate = int(sample_rate_value) if sample_rate_value is not None else None
+            except (TypeError, ValueError):
+                sample_rate = None
+            duration_value = entry.get("duration")
+            if duration_value is None:
+                duration_value = entry.get("duration_s")
+            try:
+                duration = float(duration_value) if duration_value is not None else None
+            except (TypeError, ValueError):
+                duration = None
+            channels_value = entry.get("channels")
+            try:
+                channels = int(channels_value) if channels_value is not None else None
+            except (TypeError, ValueError):
+                channels = None
+            language_value = entry.get("language")
+            language = str(language_value) if language_value not in (None, "") else None
+            normalised.append(
+                {
+                    "path": path_text,
+                    "sample_rate": sample_rate,
+                    "duration_s": duration,
+                    "language": language,
+                    "channels": channels,
+                }
+            )
+    if normalised:
+        gen_state["audio_tracks"] = normalised
+    else:
+        gen_state.pop("audio_tracks", None)

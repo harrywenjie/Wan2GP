@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 
 def _normalize_prompt(text: Any) -> str:
@@ -15,55 +15,134 @@ def _normalize_prompt(text: Any) -> str:
     return prompt_text
 
 
-def generate_queue_summary(queue: List[Dict[str, Any]]) -> str:
+def _normalize_audio_tracks(
+    audio_tracks: Optional[Sequence[Mapping[str, Any]]]
+) -> List[Dict[str, Any]]:
+    normalised: List[Dict[str, Any]] = []
+    if not audio_tracks:
+        return normalised
+    for entry in audio_tracks:
+        if not isinstance(entry, Mapping):
+            continue
+        path_value = entry.get("path")
+        if not path_value:
+            continue
+        try:
+            path_text = str(path_value)
+        except Exception:
+            continue
+        sample_rate_value = entry.get("sample_rate")
+        try:
+            sample_rate = int(sample_rate_value) if sample_rate_value is not None else None
+        except (TypeError, ValueError):
+            sample_rate = None
+        duration_value = entry.get("duration_s", entry.get("duration"))
+        try:
+            duration = float(duration_value) if duration_value is not None else None
+        except (TypeError, ValueError):
+            duration = None
+        channels_value = entry.get("channels")
+        try:
+            channels = int(channels_value) if channels_value is not None else None
+        except (TypeError, ValueError):
+            channels = None
+        language_value = entry.get("language")
+        language = str(language_value) if language_value not in (None, "") else None
+        normalised.append(
+            {
+                "path": path_text,
+                "sample_rate": sample_rate,
+                "duration_s": duration,
+                "language": language,
+                "channels": channels,
+            }
+        )
+    return normalised
+
+
+def normalize_audio_tracks(
+    audio_tracks: Optional[Sequence[Mapping[str, Any]]]
+) -> List[Dict[str, Any]]:
+    return _normalize_audio_tracks(audio_tracks)
+
+
+def generate_queue_summary(
+    queue: List[Dict[str, Any]],
+    audio_tracks: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> str:
     """
     Produce a plain-text snapshot of the queued tasks for CLI consumption.
 
     The first entry in the queue represents the active task; subsequent entries
     are displayed with their prompt, repeat count, and high-level metadata.
     """
+    normalised_audio = _normalize_audio_tracks(audio_tracks)
+    lines: List[str] = []
+
     if len(queue) <= 1:
-        return "Queue is empty."
+        lines.append("Queue is empty.")
+    else:
+        header = f"{'Row':>3}  {'Task':>6}  {'Rpt':>3}  {'Frames':>6}  {'Steps':>5}  {'Start':>5}  {'End':>3}  Prompt"
+        lines.extend(["Queued tasks:", "", header, "-" * len(header)])
 
-    header = f"{'Row':>3}  {'Task':>6}  {'Rpt':>3}  {'Frames':>6}  {'Steps':>5}  {'Start':>5}  {'End':>3}  Prompt"
-    lines = ["Queued tasks:", "", header, "-" * len(header)]
+        for index, item in enumerate(queue[1:], start=1):
+            task_id = item.get("id", index)
+            repeats = item.get("repeats", 1)
+            length = item.get("length", "-")
+            steps = item.get("steps", "-")
+            start_flag = "yes" if item.get("start_image_data_base64") else "no"
+            end_flag = "yes" if item.get("end_image_data_base64") else "no"
+            prompt_text = _normalize_prompt(item.get("prompt"))
+            task_display = str(task_id)
+            if len(task_display) > 6:
+                task_display = task_display[-6:]
+            attachment_labels: List[str] = []
+            for label in item.get("start_image_labels") or []:
+                if label and label not in attachment_labels:
+                    attachment_labels.append(label)
+            for label in item.get("end_image_labels") or []:
+                if label and label not in attachment_labels:
+                    attachment_labels.append(label)
+            media_suffix = ""
+            if attachment_labels:
+                media_suffix = " [" + ", ".join(attachment_labels) + "]"
 
-    for index, item in enumerate(queue[1:], start=1):
-        task_id = item.get("id", index)
-        repeats = item.get("repeats", 1)
-        length = item.get("length", "-")
-        steps = item.get("steps", "-")
-        start_flag = "yes" if item.get("start_image_data_base64") else "no"
-        end_flag = "yes" if item.get("end_image_data_base64") else "no"
-        prompt_text = _normalize_prompt(item.get("prompt"))
-        task_display = str(task_id)
-        if len(task_display) > 6:
-            task_display = task_display[-6:]
-        attachment_labels: List[str] = []
-        for label in item.get("start_image_labels") or []:
-            if label and label not in attachment_labels:
-                attachment_labels.append(label)
-        for label in item.get("end_image_labels") or []:
-            if label and label not in attachment_labels:
-                attachment_labels.append(label)
-        media_suffix = ""
-        if attachment_labels:
-            media_suffix = " [" + ", ".join(attachment_labels) + "]"
+            lines.append(
+                f"{index:>3}  {task_display:>6}  {str(repeats):>3}  {str(length):>6}  {str(steps):>5}  {start_flag:>5}  {end_flag:>3}  {prompt_text}"
+                + media_suffix
+            )
 
-        lines.append(
-            f"{index:>3}  {task_display:>6}  {str(repeats):>3}  {str(length):>6}  {str(steps):>5}  {start_flag:>5}  {end_flag:>3}  {prompt_text}"
-            + media_suffix
-        )
+        lines.append("")
+        lines.append(f"Total queued entries (excluding active): {len(queue) - 1}")
 
-    lines.append("")
-    lines.append(f"Total queued entries (excluding active): {len(queue) - 1}")
+    if normalised_audio:
+        if lines:
+            lines.append("")
+        lines.append("Audio tracks:")
+        for idx, track in enumerate(normalised_audio, start=1):
+            sample_rate = track.get("sample_rate")
+            sample_rate_text = str(sample_rate) if sample_rate is not None else "<unknown>"
+            duration = track.get("duration_s")
+            duration_text = f"{duration:.2f}s" if isinstance(duration, (int, float)) and duration is not None else "<unknown>"
+            language = track.get("language") or "<unknown>"
+            channels = track.get("channels")
+            channels_text = str(channels) if channels is not None else "<unknown>"
+            lines.append(
+                f"  #{idx} path={track['path']} sample_rate={sample_rate_text} duration={duration_text} language={language} channels={channels_text}"
+            )
+
     return "\n".join(lines)
 
 
-def build_queue_snapshot(queue: List[Dict[str, Any]]) -> Dict[str, Any]:
+def build_queue_snapshot(
+    queue: List[Dict[str, Any]],
+    audio_tracks: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> Dict[str, Any]:
+    normalised_audio = _normalize_audio_tracks(audio_tracks)
     return {
-        "queue_summary": generate_queue_summary(queue),
+        "queue_summary": generate_queue_summary(queue, audio_tracks=normalised_audio),
         "queue_length": max(len(queue) - 1, 0),
+        "audio_tracks": normalised_audio,
     }
 
 
@@ -79,17 +158,25 @@ class QueueStateTracker:
     _queue: List[Dict[str, Any]] = None
     _queue_summary: str = "Queue is empty."
     _queue_length: int = 0
+    _audio_tracks: List[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         if self._queue is None:
             self._queue = []
+        if self._audio_tracks is None:
+            self._audio_tracks = []
 
-    def update(self, queue: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def update(
+        self,
+        queue: List[Dict[str, Any]],
+        audio_tracks: Optional[Sequence[Mapping[str, Any]]] = None,
+    ) -> Dict[str, Any]:
         snapshot = list(queue)
         self._queue = snapshot
-        metrics = build_queue_snapshot(snapshot)
+        metrics = build_queue_snapshot(snapshot, audio_tracks=audio_tracks)
         self._queue_summary = metrics["queue_summary"]
         self._queue_length = metrics["queue_length"]
+        self._audio_tracks = metrics["audio_tracks"]
         return metrics
 
     def snapshot(self) -> List[Dict[str, Any]]:
@@ -99,6 +186,7 @@ class QueueStateTracker:
         return {
             "queue_summary": self._queue_summary,
             "queue_length": self._queue_length,
+            "audio_tracks": list(self._audio_tracks),
         }
 
 
@@ -112,9 +200,11 @@ def get_default_tracker() -> QueueStateTracker:
 def update_queue_tracking(
     queue: List[Dict[str, Any]],
     tracker: Optional[QueueStateTracker] = None,
+    *,
+    audio_tracks: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     active_tracker = tracker or _default_tracker
-    return active_tracker.update(queue)
+    return active_tracker.update(queue, audio_tracks=audio_tracks)
 
 
 QUEUE_COUNTER_DEFAULTS = {

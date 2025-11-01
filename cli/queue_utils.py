@@ -146,6 +146,7 @@ def update_queue_data(
     queue: List[Dict[str, Any]],
     *,
     tracker: Optional[QueueStateTracker] = None,
+    audio_tracks: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Update queue tracking metadata and return a lightweight snapshot.
@@ -154,8 +155,8 @@ def update_queue_data(
     utilities so orchestration no longer depends on the legacy module.
     """
 
-    update_queue_tracking(queue, tracker)
-    return dict(build_queue_snapshot(queue))
+    update_queue_tracking(queue, tracker, audio_tracks=audio_tracks)
+    return dict(build_queue_snapshot(queue, audio_tracks=audio_tracks))
 
 
 def clear_queue_action(
@@ -187,7 +188,11 @@ def clear_queue_action(
                 # Best-effort interrupt; downstream cleanup still runs.
                 pass
         cleared_pending = clear_pending_tasks(gen, active_queue)
-        metrics = update_queue_data(active_queue, tracker=tracker)
+        metrics = update_queue_data(
+            active_queue,
+            tracker=tracker,
+            audio_tracks=gen.get("audio_tracks"),
+        )
         if aborted_current or cleared_pending:
             reset_generation_counters(gen, preserve_abort=aborted_current)
 
