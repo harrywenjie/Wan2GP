@@ -5,7 +5,6 @@ import torchvision.transforms.functional as TF
 import torch.nn.functional as F
 import cv2
 import tempfile
-import imageio
 import torch
 import decord
 from PIL import Image
@@ -249,9 +248,6 @@ def convert_tensor_to_image(t, frame_no = 0, mask_levels = False):
     else:
         return Image.fromarray(t.clone().add_(1.).mul_(127.5).permute(1,2,0).to(torch.uint8).cpu().numpy())
 
-def save_image(tensor_image, name, frame_no = -1):
-    convert_tensor_to_image(tensor_image, frame_no).save(name)
-
 def get_outpainting_full_area_dimensions(frame_height,frame_width, outpainting_dims):
     outpainting_top, outpainting_bottom, outpainting_left, outpainting_right= outpainting_dims
     frame_height = int(frame_height * (100 + outpainting_top + outpainting_bottom) / 100)
@@ -372,7 +368,6 @@ def resize_and_remove_background(img_list, budget_width, budget_height, rm_backg
     return output_list, output_mask_list
 
 def fit_image_into_canvas(ref_img, image_size, canvas_tf_bg =127.5, device ="cpu", full_frame = False, outpainting_dims = None, return_mask = False, return_image = False):
-    from shared.utils.utils import save_image
     inpaint_color = canvas_tf_bg / 127.5 - 1
 
     ref_width, ref_height = ref_img.size
@@ -465,5 +460,3 @@ def prepare_video_guide_and_mask( video_guides, video_masks, pre_video_guide, im
         src_videos.append(src_video)
         src_masks.append(src_mask)
     return src_videos, src_masks
-
-

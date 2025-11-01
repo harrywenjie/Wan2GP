@@ -29,6 +29,9 @@
 - `wgp.save_video/save_image` have been removed. All persistence now flows through `MediaPersistenceContext` or directly into `core.io.media.write_*`, keeping a single code path for retries and logging.
 - MatAnyOne fallbacks now call `write_video` when a context is unavailable, preserving codec/container overrides without touching the legacy `shared.utils.audio_video` shims.
 - The legacy `shared.utils.audio_video.save_*` adapters have been deleted; any lagging preprocessors must migrate to `MediaPersistenceContext` or call `core.io.media.write_*` directly to preserve logging and retry behaviour.
+- `shared.utils.utils.save_image` has been removed; any tensor-to-image persistence flows must route through `MediaPersistenceContext.save_image` or `core.io.media.write_image` so retry/logging semantics stay consistent.
+- Remaining `models/wan` video utilities (`fantasytalking`, `multitalk`) now call `core.io.media.write_video`, keeping preprocessing helpers aligned with the CLI persistence stack instead of hand-rolled `imageio` writers.
+- The MatAnyOne manifest recorder captures audio artifacts when reattaching source tracks; the CLI integration suite asserts the JSONL rows include `audio` roles with codec/container metadata alongside the mask entries.
 
 ## Pending Extraction Work
 

@@ -1,11 +1,14 @@
 # Copyright Alibaba Inc. All Rights Reserved.
 
-import imageio
 import librosa
 import numpy as np
 import torch
+from pathlib import Path
+from typing import Any, Dict
+
 from PIL import Image
-from tqdm import tqdm
+
+from core.io.media import VideoSaveConfig, write_video
 
 
 def resize_image_by_longest_edge(image_path, target_size):
@@ -17,13 +20,22 @@ def resize_image_by_longest_edge(image_path, target_size):
 
 
 def save_video(frames, save_path, fps, quality=9, ffmpeg_params=None):
-    writer = imageio.get_writer(
-        save_path, fps=fps, quality=quality, ffmpeg_params=ffmpeg_params
+    target = Path(save_path)
+    container = target.suffix.lstrip(".") or "mp4"
+    extra_params: Dict[str, Any] = {}
+    if quality is not None:
+        extra_params["quality"] = quality
+    if ffmpeg_params:
+        extra_params["ffmpeg_params"] = list(ffmpeg_params)
+
+    config = VideoSaveConfig(
+        fps=int(round(fps)),
+        container=container,
+        extra_params=extra_params,
     )
-    for frame in tqdm(frames, desc="Saving video"):
-        frame = np.array(frame)
-        writer.append_data(frame)
-    writer.close()
+    result = write_video(frames, str(target), config=config)
+    if result is None:
+        raise RuntimeError(f"Failed to write video to {target}")
 
 
 def get_audio_features(wav2vec, audio_processor, audio_path, fps, start_frame, num_frames):

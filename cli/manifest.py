@@ -293,6 +293,39 @@ def build_matanyone_artifacts(
         _build_video_entry("mask_alpha", alpha_path),
     ]
 
+    for (kind, resolved), captures_list in list(capture_index.items()):
+        if kind != "audio":
+            continue
+        while captures_list:
+            capture = captures_list.pop(0)
+            entry_container = None
+            entry_codec = None
+            if capture.config is not None:
+                entry_container = getattr(capture.config, "format", None)
+                entry_codec = getattr(capture.config, "subtype", None)
+            normalized_container = str(entry_container) if entry_container else None
+            if normalized_container:
+                entry_container = (
+                    normalized_container[1:]
+                    if normalized_container.startswith(".")
+                    else normalized_container
+                )
+            else:
+                entry_container = resolved.suffix.lstrip(".") or None
+            metadata_sidecar = str(resolved.with_suffix(".json")) if metadata_mode == "json" else None
+            artifacts.append(
+                {
+                    "role": "audio",
+                    "path": str(resolved),
+                    "container": entry_container,
+                    "codec": entry_codec,
+                    "frames": None,
+                    "duration_s": None,
+                    "metadata_sidecar": metadata_sidecar,
+                }
+            )
+        capture_index.pop((kind, resolved), None)
+
     if rgba_zip_path is not None:
         _pop_capture(capture_index, "mask_archive", rgba_zip_path)
         resolved = resolve_manifest_path(rgba_zip_path)

@@ -6,17 +6,17 @@ import torch.nn as nn
 
 from einops import rearrange, repeat
 from functools import lru_cache
-import imageio
+from pathlib import Path
 import uuid
-from tqdm import tqdm
 import numpy as np
 import subprocess
 import soundfile as sf
-import torchvision
 import binascii
 import os.path as osp
 from skimage import color
 from mmgp.offload import get_cache, clear_caches
+
+from core.io.media import VideoSaveConfig, write_video
 
 VID_EXTENSIONS = (".mp4", ".avi", ".mov", ".mkv")
 ASPECT_RATIO_627 = {
@@ -244,50 +244,56 @@ def rand_name(length=8, suffix=''):
         name += suffix
     return name
 
-def cache_video(tensor,
-                save_file=None,
-                fps=30,
-                suffix='.mp4',
-                nrow=8,
-                normalize=True,
-                value_range=(-1, 1),
-                retry=5):
-    
-    # cache file
-    cache_file = osp.join('/tmp', rand_name(
-        suffix=suffix)) if save_file is None else save_file
+def cache_video(
+    tensor,
+    save_file=None,
+    fps=30,
+    suffix=".mp4",
+    nrow=8,
+    normalize=True,
+    value_range=(-1, 1),
+    retry=5,
+):
 
-    # save to cache
-    error = None
-    for _ in range(retry):
-       
-        # preprocess
-        tensor = tensor.clamp(min(value_range), max(value_range))
-        tensor = torch.stack([
-                torchvision.utils.make_grid(
-                    u, nrow=nrow, normalize=normalize, value_range=value_range)
-                for u in tensor.unbind(2)
-            ],
-                                 dim=1).permute(1, 2, 3, 0)
-        tensor = (tensor * 255).type(torch.uint8).cpu()
+    cache_file = osp.join("/tmp", rand_name(suffix=suffix)) if save_file is None else save_file
+    container_hint = suffix.lstrip(".") if suffix else None
+    resolved = Path(cache_file)
+    container = resolved.suffix.lstrip(".") or container_hint or "mp4"
 
-        # write video
-        writer = imageio.get_writer(cache_file, fps=fps, codec='libx264', quality=10, ffmpeg_params=["-crf", "10"])
-        for frame in tensor.numpy():
-            writer.append_data(frame)
-        writer.close()
-        return cache_file
+    config = VideoSaveConfig(
+        fps=int(round(fps)),
+        codec_type="libx264_10",
+        container=container,
+        nrow=nrow,
+        normalize=normalize,
+        value_range=value_range,
+        retry=retry,
+        extra_params={"ffmpeg_params": ["-crf", "10"]},
+    )
+
+    result = write_video(tensor, cache_file, config=config)
+    if result is None:
+        raise RuntimeError(f"Failed to cache video at {cache_file}")
+    return result
 
 def save_video_ffmpeg(gen_video_samples, save_path, vocal_audio_list, fps=25, quality=5, high_quality_save=False):
     
     def save_video(frames, save_path, fps, quality=9, ffmpeg_params=None):
-        writer = imageio.get_writer(
-            save_path, fps=fps, quality=quality, ffmpeg_params=ffmpeg_params
+        extra_params = {}
+        if quality is not None:
+            extra_params["quality"] = quality
+        if ffmpeg_params:
+            extra_params["ffmpeg_params"] = list(ffmpeg_params)
+
+        container = Path(save_path).suffix.lstrip(".") or "mp4"
+        config = VideoSaveConfig(
+            fps=int(round(fps)),
+            container=container,
+            extra_params=extra_params,
         )
-        for frame in tqdm(frames, desc="Saving video"):
-            frame = np.array(frame)
-            writer.append_data(frame)
-        writer.close()
+        result = write_video(frames, save_path, config=config)
+        if result is None:
+            raise RuntimeError(f"Failed to write video to {save_path}")
     save_path_tmp = save_path + "-temp.mp4"
 
     if high_quality_save:

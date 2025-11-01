@@ -111,7 +111,7 @@ Every path must reference an existing file; the CLI validates before execution.
 - `inputs` – object capturing resolved CLI arguments that materially affect reproducibility (prompt text, seeds, frame counts, model identifiers, and any runtime overrides that were applied). This section mirrors what `tests/test_queue_prompt_payloads.py` asserts today so queue snapshots and manifest entries stay aligned.
 - `status` – `"success"` or `"error"`. Failures capture `error` (string message) and omit `artifacts`.
 
-The manifest writer must flush the JSON line only after persistence succeeds. Dry runs skip manifest emission entirely. MatAnyOne reuses the same format; its `artifacts` list uses `mask_foreground`, `mask_alpha`, and `rgba_archive` roles.
+The manifest writer must flush the JSON line only after persistence succeeds. Dry runs skip manifest emission entirely. MatAnyOne reuses the same format; its `artifacts` list uses `mask_foreground`, `mask_alpha`, `rgba_archive`, and (when audio tracks are reattached) `audio` roles.
 
 `cli.generate` instruments `ProductionManager.media_context()` with a recording proxy so every `MediaPersistenceContext.save_*` call is captured before the JSONL row is emitted. Adapter payloads are hashed from canonical JSON (sorted keys, compact separators) to give downstream automation stable digests, and the writer appends entries atomically to the resolved manifest path. Failures log an `"error"` field and skip artifact emission so partial successes never leak into automation feeds.
 
@@ -174,9 +174,9 @@ Successful runs log the written file paths and echo them to STDOUT. Expect:
 - Foreground video (`<prefix><mask-suffix>.<container>`) using the container configured in `server_config` (defaults to `mp4`).
 - Alpha companion (`<prefix>_alpha.<container>`), persisted with the same codec/container defaults.
 - Optional RGBA ZIP archive when `--mask-type alpha` is selected **and** `save_masks` is enabled in the active `MediaPersistenceContext`.
-- A manifest line appended to `<output_dir>/manifests/run_history.jsonl` (or `--manifest-path`), capturing inputs and artifacts with `mask_foreground`, `mask_alpha`, and `rgba_archive` roles.
+- A manifest line appended to `<output_dir>/manifests/run_history.jsonl` (or `--manifest-path`), capturing inputs and artifacts with `mask_foreground`, `mask_alpha`, `rgba_archive`, and (when applicable) `audio` roles.
 
-MatAnyOne now threads the per-run `MediaPersistenceContext` supplied by `ProductionManager` and records artifact manifests alongside CLI runs. Video writes honour container/codec overrides (with `--codec` acting as a per-run override), audio tracks are reattached onto the context-derived container, and mask archives respect the `save_masks` toggle so debug bundles only materialise when explicitly configured. Persistence helpers retain retry logging so automation can detect and react to IO errors deterministically.
-Automated coverage: `tests/test_matanyone_cli_integration.py` patches the heavy pipeline while invoking the CLI end-to-end, asserting the manifest captures `mask_foreground`, `mask_alpha`, and `rgba_archive` artifacts plus JSON sidecars when running with `--metadata-mode json`.
+MatAnyOne now threads the per-run `MediaPersistenceContext` supplied by `ProductionManager` and records artifact manifests alongside CLI runs. Video writes honour container/codec overrides (with `--codec` acting as a per-run override), audio tracks are reattached onto the context-derived container with matching manifest entries, and mask archives respect the `save_masks` toggle so debug bundles only materialise when explicitly configured. Persistence helpers retain retry logging so automation can detect and react to IO errors deterministically.
+Automated coverage: `tests/test_matanyone_cli_integration.py` patches the heavy pipeline while invoking the CLI end-to-end, asserting the manifest captures `mask_foreground`, `mask_alpha`, `rgba_archive`, and `audio` artifacts plus JSON sidecars when running with `--metadata-mode json`.
 
 For architectural notes and migration history consult `PROJECT_PLAN_LIVE.md`. External scripts may reuse the bootstrap directly via `import wgp; wgp.ensure_runtime_initialized()` before calling lower level helpers.

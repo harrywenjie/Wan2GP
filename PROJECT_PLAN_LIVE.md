@@ -56,12 +56,12 @@
 ---
 
 ## Immediate Next Actions
-- Eliminate residual `shared.utils.utils.save_image` / `models/wan/*` persistence helpers by standardising on `MediaPersistenceContext` or `core.io.media`.
-  - **Proposal (2025-11-03)**: Use `rg` to trace remaining callers, refactor each module to request a media context (or call `write_image` directly when contexts are unavailable), and remove the legacy helpers once all references are gone.
-  - **Rationale**: Clearing the last GUI-era persistence shims keeps logging/retry behaviour consistent and prevents future drift between preprocessing and generation code paths.
-  - **Design (2025-11-03)**: Migrate modules incrementally, thread a media context through call stacks that still rely on globals, fall back to explicit `core.io.media` configs where necessary, and provide targeted tests to lock in the new persistence surface before deleting the helpers.
-- Extend MatAnyOne manifest coverage to include audio reattachment scenarios.
-  - **Proposal (2025-11-03)**: Simulate a propagation run with mocked audio tracks and assert the manifest recorder records `audio` artifacts alongside the existing mask entries.
-  - **Rationale**: Ensures the manifest remains authoritative when audio muxing is enabled, enabling downstream automation to reason about saved audio assets.
-  - **Design (2025-11-03)**: Patch the pipeline in an integration test to produce fake audio saves, wrap a stub `MediaPersistenceContext` that records `save_audio` calls, and validate the JSONL entry captures paths, codec defaults, and metadata sidecars for audio artifacts.
+- Persist MatAnyOne audio tracks through `MediaPersistenceContext.save_audio` instead of relying on pipeline stubs.
+  - **Proposal (2025-11-04)**: Decode or remux the temporary AAC tracks into context-managed outputs, invoke `save_audio` with per-track sample rates, and surface the saved paths in `MatAnyOneResult` metadata so manifests reflect the canonical audio artifacts produced by real runs.
+  - **Rationale**: Recording concrete audio files keeps preprocessing parity with generation workflows, eliminates reliance on test-only stubs, and ensures downstream automation can hash and archive audio assets alongside mask outputs.
+  - **Design (2025-11-04)**: Introduce an audio persistence helper in `preprocessing.matanyone.app` that shells out to `ffmpeg` (or streams via `soundfile`) to convert each extracted track, honour context overrides, and update the integration suite to exercise the end-to-end path without mocking `save_audio`.
+- Sweep remaining preprocessing/generation modules for direct `imageio` writers and schedule migrations onto `core.io.media`.
+  - **Proposal (2025-11-04)**: Use `rg` to catalogue outstanding `imageio.get_writer` usage (e.g. `preprocessing/dwpose`, `models/ltx_video`), prioritise high-traffic pipelines, and plan incremental refactors that reuse shared Video/Image save configs.
+  - **Rationale**: Unifying persistence on the context layer keeps retry/logging semantics consistent and prevents regressions as codec overrides evolve.
+  - **Design (2025-11-04)**: Track each call site in a checklist, extract small wrappers that forward to `write_video`/`write_image`, and add regression tests where the legacy writers had bespoke parameters (macro block sizes, CRF overrides) before retiring the direct `imageio` calls.
   
