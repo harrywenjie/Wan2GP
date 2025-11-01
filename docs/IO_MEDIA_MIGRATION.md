@@ -43,6 +43,8 @@ Relocate the media output helpers (`save_video`, `save_image`, and the associate
 - **`core.io.media.write_image`**
   - Operates on torch tensors, converts RGBA tensors to PNG automatically, and uses PIL or `torchvision` depending on the requested format.
   - Returns the resolved path even when retries exhaust, mirroring the legacy helper so callers can decide how to respond.
+- **Dwpose annotators**
+  - `preprocessing.dwpose.save_one_video` now wraps `core.io.media.write_video`, eliminating its ad-hoc `imageio.get_writer` path while preserving macro-block and quality overrides through `VideoSaveConfig.extra_params`.
 - **Metadata bundling**
   - `write_metadata_bundle` infers the artifact type from `MetadataSaveConfig`/file suffix, calls the existing writers, and reports failures through the notifications logger.
 - **Orchestration touchpoints**

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) Alibaba, Inc. and its affiliates.
 
+import logging
 import os
 import cv2
 import torch
@@ -11,6 +12,7 @@ from PIL import Image
 import onnxruntime as ort
 from concurrent.futures import ThreadPoolExecutor
 import threading
+from core.io.media import VideoSaveConfig, write_video
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
@@ -413,18 +415,18 @@ class PoseBodyFaceHandVideoAnnotator(OptimizedPoseBodyFaceHandVideoAnnotator):
 
 
 # Keep the existing utility functions
-import imageio
+logger = logging.getLogger(__name__)
+
 
 def save_one_video(file_path, videos, fps=8, quality=8, macro_block_size=None):
-    try:
-        video_writer = imageio.get_writer(file_path, fps=fps, codec='libx264', quality=quality, macro_block_size=macro_block_size)
-        for frame in videos:
-            video_writer.append_data(frame)
-        video_writer.close()
-        return True
-    except Exception as e:
-        print(f"Video save error: {e}")
-        return False
+    config = VideoSaveConfig(fps=fps)
+    if quality is not None:
+        config.extra_params["quality"] = quality
+    if macro_block_size is not None:
+        config.extra_params["macro_block_size"] = macro_block_size
+
+    result = write_video(videos, file_path, config=config, logger=logger)
+    return bool(result)
     
 def get_frames(video_path):
     frames = []

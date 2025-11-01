@@ -27,6 +27,7 @@
 - [Planned] Continue peeling residual runtime globals (model load/release, queue callbacks) listed in `LIVE_CONTEXT.md`.
 
 **Milestone 3 – Harden CLI orchestration (Active)**
+- [Completed] Wrapped `preprocessing/dwpose.save_one_video` around `core.io.media.write_video`, retiring its direct `imageio` dependency (2025-11-02).
 - [In Progress] Keep queue management under `cli/` while retiring legacy shims; move any remaining helpers out of `core/`.
 - [Completed] Added MatAnyOne CLI manifest integration smoke coverage verifying `mask_foreground`, `mask_alpha`, and `rgba_archive` roles (2025-11-02).
 - [Completed] Persisted MatAnyOne audio tracks through `MediaPersistenceContext.save_audio`, wiring decoded artifacts into manifests and metadata sidecars (2025-11-02).
@@ -83,12 +84,12 @@
 ---
 
 ## Immediate Next Actions
-- Sweep remaining preprocessing/generation modules for direct `imageio` writers and schedule migrations onto `core.io.media`.
-  - **Proposal (2025-11-02)**: Use `rg` to catalogue outstanding `imageio.get_writer` usage (e.g. `preprocessing/dwpose`, `models/ltx_video`), prioritise high-traffic pipelines, and plan incremental refactors that reuse shared Video/Image save configs.
-  - **Rationale**: Unifying persistence on the context layer keeps retry/logging semantics consistent and prevents regressions as codec overrides evolve.
-  - **Design (2025-11-02)**: Track each call site in a checklist, extract small wrappers that forward to `write_video`/`write_image`, and add regression tests where the legacy writers had bespoke parameters (macro block sizes, CRF overrides) before retiring the direct `imageio` calls.
+- Solidify `preprocessing/dwpose` persistence on `core.io.media` now that `save_one_video` wraps `write_video`.
+  - **Proposal (2025-11-02)**: Trace how `save_one_video` is consumed (CLI helpers, legacy scripts) and thread a `MediaPersistenceContext` or explicit `VideoSaveConfig` clones through those call sites so codec/container overrides stay aligned with the Production Manager defaults.
+  - **Rationale**: The wrapper ensures consistent logging/retry semantics; wiring it into real call paths keeps annotate/export flows deterministic and unlocks manifest logging when the annotator runs under CLI control.
+  - **Design (2025-11-02)**: Replace ad-hoc writer configuration with context-driven helpers, carry existing macro block/quality overrides through `config.extra_params`, and document the contract in `docs/IO_MEDIA_MIGRATION.md` before adding regression coverage.
 - Stress-test queue-control audio summaries with multi-track payloads to make sure textual output scales beyond single-track MatAnyOne runs.
   - **Proposal (2025-11-02)**: Extend the smoke harness fixtures (or add a dedicated test) to seed multiple audio entries with mixed metadata, then assert both the JSON payload and queue summary enumerate each track cleanly.
   - **Rationale**: Bilingual or commentary-dual exports depend on multiple tracks; coverage here prevents regressions as persistence adapters evolve.
   - **Design (2025-11-02)**: Generalise the stub manager’s audio injection helper so future tests can reuse it, and verify summary formatting via targeted string assertions before promoting the helper into reusable test utilities.
-  
+ 

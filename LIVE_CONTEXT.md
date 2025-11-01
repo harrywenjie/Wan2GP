@@ -34,6 +34,7 @@
 - The legacy `shared.utils.audio_video.save_*` adapters have been deleted; any lagging preprocessors must migrate to `MediaPersistenceContext` or call `core.io.media.write_*` directly to preserve logging and retry behaviour.
 - `shared.utils.utils.save_image` has been removed; any tensor-to-image persistence flows must route through `MediaPersistenceContext.save_image` or `core.io.media.write_image` so retry/logging semantics stay consistent.
 - Remaining `models/wan` video utilities (`fantasytalking`, `multitalk`) now call `core.io.media.write_video`, keeping preprocessing helpers aligned with the CLI persistence stack instead of hand-rolled `imageio` writers.
+- `preprocessing.dwpose.save_one_video` now delegates to `core.io.media.write_video`, so pose annotator exports inherit the shared logging/retry semantics and container overrides.
 - The MatAnyOne manifest recorder captures audio artifacts when reattaching source tracks; the CLI integration suite asserts the JSONL rows include `audio` roles with codec/container metadata plus `sample_rate`, `duration_s`, `language`, and `channels`.
 
 ## Pending Extraction Work
