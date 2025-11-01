@@ -44,6 +44,23 @@ The headless build never exposes GUI-driven affordances — video/audio playback
   3. Provide logging hooks by passing a `logger` or callable into the helpers; replace the current `print` statements in `shared.utils.audio_video` with structured logging surfaced through the injected notifier/logger.
   4. Update `wgp.generate_video` and MatAnyOne to consume the new helpers via `ProductionManager`-supplied adapters, keeping return values/backwards compatibility intact while shrinking direct dependencies on `shared.utils.audio_video`.
   5. Relocate the metadata writers (`save_video_metadata`, `save_image_metadata`, `save_audio_metadata`) alongside the new module, exposing them through a unified interface so future queue runners can mock or redirect persistence easily.
+- **Save helper call inventory (2025-02-19)**
+  - `wgp.py:2532` writes post-processing tensors to disk via `save_video(...)`, needing a `VideoSaveConfig` assembled from CLI overrides and temp-path helpers for MMAudio muxing.
+  - `wgp.py:3396-3400` dumps guide/mask tensors when `--save-masks` is active; the writer must accept raw torch tensors plus explicit `value_range=(0, 1)`.
+  - `wgp.py:3704` encodes still-frame batches with `save_image(...)`, coupling JPEG/WebP quality to `server_config["image_output_codec"]`.
+  - `wgp.py:3710` encodes a temporary video for audio muxing; it shares parameters with the final writer but needs deterministic temp naming (`get_available_filename`) and retry semantics.
+  - `wgp.py:3737` emits the final video artifact with the same codec/container overrides.
+  - Interface needs:
+    - Add a `build_video_save_config` / `build_image_save_config` helper in `core/io/media` so callers receive dataclasses without reaching into `server_config`.
+    - Let `ProductionManager` construct and pass a `MediaPersistenceContext` (video/image configs + debug flags) into `GenerationRuntime`, removing the local wrappers.
+    - Decide whether mask dumps stay (arm via CLI flag) or move to a structured logging hook to avoid quietly writing into CWD.
+
+### Prompt Enhancer & LoRA Dependency Map (2025-02-19)
+- Prompt enhancer loader: `setup_prompt_enhancer` (wgp.py:1707-1736) reads `server_config["enhancer_enabled"]`, uses `fl` to locate Florence2/Llama weights, instantiates HF models (`AutoModelForCausalLM`, `AutoProcessor`, `AutoTokenizer`), threads them into `pipe`, and updates the shared `enhancer_offloadobj`.
+- Prompt enhancer runtime: `process_prompt_enhancer` (wgp.py:2671-2701) consumes the cached models, `generate_cinematic_prompt`, and `seed_everything`, mixing optional image inputs; `generate_video` gates it via `server_config["enhancer_mode"]`.
+- LoRA discovery: `get_transformer_loras`, `check_loras_exist`, and `extract_preset` pull from `get_model_recursive_prop`, `TaskInputManager` caches, `get_lora_dir`, and the filesystem to resolve filenames/multipliers.
+- LoRA application: `generate_video` (wgp.py:2914-2950) parses CLI/transformer LoRAs with `parse_loras_multipliers`, validates presence via `TaskInputManager`, then invokes `offload.load_loras_into_model`/`sync_models_loras`.
+- Injection implications: `ProductionManager` needs explicit hooks to request enhancer models, LoRA directories, and multiplier parsers so the runtime no longer mutates module-level globals or reaches into `offload` directly.
 
 3. **Externalise queueing and CLI orchestration**
    - [In Progress] Keep queue management under `cli/` (and future worker integrations) while `ProductionManager` exposes stateless generation hooks.
@@ -80,8 +97,8 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ---
 
 ## Immediate Next Actions
-- Inventory the remaining save-helper usage inside `wgp.generate_video` and outline the `core/io/media` interfaces required to absorb them.
-- Map `ProductionManager` prompt enhancer and LoRA prep dependencies so they can be injected without mutating module-level globals.
+- Draft a `MediaPersistenceContext` (video/image config builders plus debug-mask policy) in `core/io/media`, then sketch how `ProductionManager` will hand it to `wgp.generate_video`.
+- Design prompt-enhancer and LoRA injection hooks for `ProductionManager` (loader interfaces, state caching, TaskInputManager touchpoints) ahead of the runtime refactor.
 
 ---
 
