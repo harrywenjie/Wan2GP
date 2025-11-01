@@ -162,7 +162,21 @@ class MatAnyOneCliIntegrationTests(TestCase):
             input_path.write_bytes(b"\x00")
             mask_path.write_bytes(b"\x00")
 
-            result_metadata: Dict[str, object] = {"codec": "libx264_8", "container": "mp4", "attach_audio": True}
+            audio_output = (output_dir / "stub_audio.wav").resolve()
+            result_metadata: Dict[str, object] = {
+                "codec": "libx264_8",
+                "container": "mp4",
+                "attach_audio": True,
+                "audio_tracks": [
+                    {
+                        "path": str(audio_output),
+                        "sample_rate": 16000,
+                        "duration": 0.25,
+                        "language": "eng",
+                        "channels": 1,
+                    }
+                ],
+            }
             stub_result = MatAnyOneResult(
                 foreground_path=output_dir / "mask_foreground.mp4",
                 alpha_path=output_dir / "mask_alpha.mp4",
@@ -180,7 +194,7 @@ class MatAnyOneCliIntegrationTests(TestCase):
 
             metadata_state = MetadataState(choice="json", configs={})
             context = StubMediaContext()
-            audio_output = output_dir / "stub_audio.wav"
+            mock_logger = mock.MagicMock()
 
             def fake_generate(state: Dict[str, object], request: MatAnyOneRequest) -> MatAnyOneResult:
                 if request.media_context is not None:
@@ -197,6 +211,9 @@ class MatAnyOneCliIntegrationTests(TestCase):
             ), mock.patch(
                 "cli.matanyone.generate_masks",
                 side_effect=fake_generate,
+            ), mock.patch(
+                "cli.matanyone.configure_logging",
+                return_value=mock_logger,
             ):
                 exit_code = matanyone.main(
                     [
@@ -225,10 +242,24 @@ class MatAnyOneCliIntegrationTests(TestCase):
             self.assertIn("audio", roles)
 
             audio_entry = next(artifact for artifact in entry["artifacts"] if artifact["role"] == "audio")
-            self.assertEqual(audio_entry["path"], str(audio_output.resolve()))
+            self.assertEqual(audio_entry["path"], str(audio_output))
             self.assertEqual(audio_entry["container"], "wav")
             self.assertEqual(audio_entry["codec"], "PCM_16")
+            self.assertEqual(audio_entry["sample_rate"], 16000)
+            self.assertAlmostEqual(audio_entry["duration_s"], 0.25)
+            self.assertEqual(audio_entry["language"], "eng")
+            self.assertEqual(audio_entry["channels"], 1)
             self.assertEqual(
                 audio_entry["metadata_sidecar"],
-                str(audio_output.with_suffix(".json").resolve()),
+                str(audio_output.with_suffix(".json")),
+            )
+
+            mock_logger.info.assert_any_call("  audio_tracks: %d", 1)
+            mock_logger.info.assert_any_call(
+                "    #%d path=%s sample_rate=%s duration=%s language=%s",
+                1,
+                str(audio_output),
+                "16000",
+                "0.25s",
+                "eng",
             )

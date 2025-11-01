@@ -1,3 +1,4 @@
+import json
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -278,6 +279,21 @@ class MatAnyOnePersistenceTests(TestCase):
         self.assertEqual(audio_entries[0]["sample_rate"], 48000)
         self.assertEqual(audio_entries[0]["channels"], 2)
         self.assertEqual(audio_entries[0]["language"], "eng")
-        self.assertTrue(Path(audio_entries[0]["path"]).with_suffix(".json").exists())
+        first_sidecar_path = Path(audio_entries[0]["path"]).with_suffix(".json")
+        self.assertTrue(first_sidecar_path.exists())
         self.assertEqual(audio_entries[1]["sample_rate"], 44100)
         self.assertEqual(audio_entries[1]["channels"], 1)
+        second_sidecar_path = Path(audio_entries[1]["path"]).with_suffix(".json")
+        self.assertTrue(second_sidecar_path.exists())
+
+        with first_sidecar_path.open("r", encoding="utf-8") as handle:
+            first_sidecar = json.load(handle)
+        with second_sidecar_path.open("r", encoding="utf-8") as handle:
+            second_sidecar = json.load(handle)
+
+        self.assertEqual(first_sidecar["duration"], audio_entries[0]["duration"])
+        self.assertEqual(first_sidecar["language"], "eng")
+        self.assertIn("sample_rate", first_sidecar)
+        self.assertEqual(second_sidecar["duration"], audio_entries[1]["duration"])
+        self.assertEqual(second_sidecar["language"], "fra")
+        self.assertIn("sample_rate", second_sidecar)

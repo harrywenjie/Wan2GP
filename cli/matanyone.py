@@ -8,7 +8,7 @@ import uuid
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from cli.manifest import (
     ManifestRecorder,
@@ -148,6 +148,16 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _normalize_audio_metadata(value: Any) -> Optional[List[Dict[str, Any]]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return None
+    normalized: List[Dict[str, Any]] = []
+    for entry in value:
+        if isinstance(entry, Mapping):
+            normalized.append(dict(entry))
+    return normalized or None
+
+
 def _resolve_runtime_contexts(
     logger,
     metadata_choice: str,
@@ -255,8 +265,10 @@ def _emit_manifest_entry(
     }
 
     if status == "success" and result is not None:
-        codec = result.metadata.get("codec") if isinstance(result.metadata, dict) else None
-        container = result.metadata.get("container") if isinstance(result.metadata, dict) else None
+        metadata_payload = result.metadata if isinstance(result.metadata, dict) else {}
+        codec = metadata_payload.get("codec")
+        container = metadata_payload.get("container")
+        audio_metadata = _normalize_audio_metadata(metadata_payload.get("audio_tracks"))
         captures = recorder.captures if recorder is not None else ()
         entry["artifacts"] = build_matanyone_artifacts(
             foreground_path=result.foreground_path,
@@ -268,6 +280,7 @@ def _emit_manifest_entry(
             captures=captures,
             codec=codec,
             container=container,
+            audio_metadata=audio_metadata,
         )
     else:
         entry["artifacts"] = []
@@ -415,6 +428,30 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         logger.info("  rgba_zip_path: %s", result.rgba_zip_path)
     logger.info("  frames_processed: %d", result.frames_processed)
     logger.info("  fps: %.2f", result.fps)
+    audio_metadata = _normalize_audio_metadata(result.metadata.get("audio_tracks"))
+    if audio_metadata:
+        logger.info("  audio_tracks: %d", len(audio_metadata))
+        for index, track in enumerate(audio_metadata, start=1):
+            raw_path = track.get("path", "<unknown>")
+            path_str = str(raw_path)
+            sample_rate = track.get("sample_rate")
+            sample_rate_text = str(sample_rate) if sample_rate is not None else "<unknown>"
+            duration_value = track.get("duration")
+            try:
+                duration_value = float(duration_value) if duration_value is not None else None
+            except (TypeError, ValueError):
+                duration_value = None
+            duration_text = f"{duration_value:.2f}s" if duration_value is not None else "<unknown>"
+            language = track.get("language") or "<unknown>"
+            logger.info(
+                "    #%d path=%s sample_rate=%s duration=%s language=%s",
+                index,
+                path_str,
+                sample_rate_text,
+                duration_text,
+                language,
+            )
+
     for key, value in result.metadata.items():
         logger.debug("  metadata[%s]=%s", key, value)
     print(f"Foreground written to: {result.foreground_path}")

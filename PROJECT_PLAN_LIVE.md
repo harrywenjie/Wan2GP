@@ -25,6 +25,7 @@
 - [In Progress] Keep queue management under `cli/` while retiring legacy shims; move any remaining helpers out of `core/`.
 - [Completed] Added MatAnyOne CLI manifest integration smoke coverage verifying `mask_foreground`, `mask_alpha`, and `rgba_archive` roles (2025-11-03).
 - [Completed] Persisted MatAnyOne audio tracks through `MediaPersistenceContext.save_audio`, wiring decoded artifacts into manifests and metadata sidecars (2025-11-05).
+- [Completed] Surfaced MatAnyOne audio artifact metadata (sample rate, duration, language, channels) through CLI logging and manifest entries for downstream automation (2025-11-02).
 - [Planned] Finish disk-first workflows for mask/voice pipelines and document validation expectations for each CLI entrypoint.
 - [Planned] Emit a machine-readable artifact manifest from `cli.generate` capturing saved paths, metadata mode, and adapter payload hashes.
 
@@ -50,17 +51,17 @@
 - For CLI regression checks, run `python -m cli.generate --prompt "smoke test prompt" --dry-run --log-level INFO` to confirm argument parsing, logging, and runtime overrides.
 - Run `python -m unittest tests.test_matanyone_cli_integration` to ensure MatAnyOne manifest emission stays in sync with the CLI surface.
 - Exercise preprocessing changes with `python -m cli.matanyone --input <video> --template-mask <mask> --dry-run` (or a short real run when GPU time permits).
-- When MatAnyOne emits artifacts, inspect `<output_dir>/manifests/run_history.jsonl` (or the `--manifest-path` override) and confirm entries include `mask_foreground`, `mask_alpha`, optional `rgba_archive`, and `audio` roles with the expected metadata sidecars.
+- When MatAnyOne emits artifacts, inspect `<output_dir>/manifests/run_history.jsonl` (or the `--manifest-path` override) and confirm entries include `mask_foreground`, `mask_alpha`, optional `rgba_archive`, and `audio` roles with the expected metadata sidecars, plus audio fields for `sample_rate`, `duration_s`, `language`, and `channels`.
 - Record timing, VRAM usage, and output artifact paths in `docs/WORK_HISTORY.md` whenever a command executes generation or preprocessing work.
 - Keep any ad-hoc validation scripts lightweight and remove them once automated coverage exists.
 
 ---
 
 ## Immediate Next Actions
-- Expose MatAnyOne audio artifact metadata downstream (duration, sample rate, language) through CLI logging and manifest entries.
-  - **Proposal (2025-11-05)**: Thread `_persist_audio_artifacts` metadata into `build_matanyone_artifacts`, log saved audio paths/sample rates from `cli.matanyone`, and assert JSON sidecars capture duration/language fields.
-  - **Rationale**: Surfacing canonical audio metadata alongside masks keeps downstream automation aware of track lengths and language tags, preventing mux regressions when reattaching audio.
-  - **Design (2025-11-05)**: Extend manifest assembly to copy duration/language details, emit CLI log lines for each persisted audio track, and expand `tests/test_matanyone_persistence.py` to verify metadata propagation plus sidecar contents.
+- Surface MatAnyOne audio metadata through queue summaries and schema references so automation can consume it without reading manifests.
+  - **Proposal (2025-11-02)**: Extend `cli.queue_state.QueueStateTracker` and CLI status endpoints to emit `audio_tracks` entries (path, sample_rate, duration_s, language, channels) while updating `docs/CLI.md`/schema snippets to match.
+  - **Rationale**: Runs now persist and log canonical audio metadata; exposing the same details via queue/status APIs lets orchestration layers preflight mux compatibility before artifacts land on disk.
+  - **Design (2025-11-02)**: Add optional `audio_tracks` blocks to queue summaries, document the schema update, and add focused tests that stub MatAnyOne runs to assert the new fields propagate.
 - Sweep remaining preprocessing/generation modules for direct `imageio` writers and schedule migrations onto `core.io.media`.
   - **Proposal (2025-11-04)**: Use `rg` to catalogue outstanding `imageio.get_writer` usage (e.g. `preprocessing/dwpose`, `models/ltx_video`), prioritise high-traffic pipelines, and plan incremental refactors that reuse shared Video/Image save configs.
   - **Rationale**: Unifying persistence on the context layer keeps retry/logging semantics consistent and prevents regressions as codec overrides evolve.

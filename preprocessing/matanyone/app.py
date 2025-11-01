@@ -621,6 +621,14 @@ def _persist_audio_artifacts(
             if hasattr(logger, "warning"):
                 logger.warning("Skipping audio track %s: unable to determine sample rate.", track)
             continue
+        try:
+            persisted_sample_rate = int(effective_rate)
+        except (TypeError, ValueError):
+            persisted_sample_rate = None
+        if persisted_sample_rate is None:
+            if hasattr(logger, "warning"):
+                logger.warning("Skipping audio track %s: invalid sample rate %s.", track, effective_rate)
+            continue
 
         base_name = f"{prefix}_audio_{index + 1}"
         original_suffix = Path(track).suffix
@@ -632,7 +640,7 @@ def _persist_audio_artifacts(
             persisted_path = context.save_audio(
                 decoded,
                 str(target_path),
-                sample_rate=effective_rate,
+                sample_rate=persisted_sample_rate,
                 logger=logger,
                 config=template,
             )
@@ -643,11 +651,19 @@ def _persist_audio_artifacts(
 
         resolved_path = Path(persisted_path)
         channel_count = decoded.shape[1] if decoded.ndim == 2 else 1
+        frames_count = decoded.shape[0] if decoded.ndim >= 1 else 0
+        computed_duration: Optional[float] = None
+        try:
+            computed_duration = frames_count / float(persisted_sample_rate)
+        except (ZeroDivisionError, TypeError, ValueError):
+            computed_duration = None
+        duration_value = duration if duration is not None else computed_duration
+
         audio_entry = {
             "path": str(resolved_path),
-            "sample_rate": effective_rate,
+            "sample_rate": persisted_sample_rate,
             "channels": channel_count,
-            "duration": duration,
+            "duration": duration_value,
             "language": language,
             "source_codec": source_codec,
             "format": getattr(template, "format", None),

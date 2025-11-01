@@ -242,6 +242,7 @@ def build_matanyone_artifacts(
     captures: Sequence[ArtifactCapture],
     codec: Optional[str],
     container: Optional[str],
+    audio_metadata: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Assemble MatAnyOne artifact descriptors for manifest emission."""
 
@@ -249,6 +250,17 @@ def build_matanyone_artifacts(
     for capture in captures:
         resolved = resolve_manifest_path(capture.path)
         capture_index[(capture.kind, resolved)].append(capture)
+
+    audio_metadata_index: Dict[Path, Mapping[str, Any]] = {}
+    if audio_metadata:
+        for entry in audio_metadata:
+            if not isinstance(entry, Mapping):
+                continue
+            path_value = entry.get("path")
+            if not path_value:
+                continue
+            resolved_path = resolve_manifest_path(path_value)
+            audio_metadata_index[resolved_path] = entry
 
     def _build_video_entry(role: str, path: Path) -> Dict[str, Any]:
         capture = _pop_capture(capture_index, "video", path)
@@ -298,6 +310,7 @@ def build_matanyone_artifacts(
             continue
         while captures_list:
             capture = captures_list.pop(0)
+            metadata_entry = audio_metadata_index.get(resolved)
             entry_container = None
             entry_codec = None
             if capture.config is not None:
@@ -313,6 +326,37 @@ def build_matanyone_artifacts(
             else:
                 entry_container = resolved.suffix.lstrip(".") or None
             metadata_sidecar = str(resolved.with_suffix(".json")) if metadata_mode == "json" else None
+            sample_rate_value: Optional[int] = None
+            if metadata_entry is not None:
+                sample_rate_value = metadata_entry.get("sample_rate")  # type: ignore[assignment]
+            if sample_rate_value is None and capture.config is not None:
+                sample_rate_value = getattr(capture.config, "sample_rate", None)
+            try:
+                sample_rate_value = int(sample_rate_value) if sample_rate_value is not None else None
+            except (TypeError, ValueError):
+                sample_rate_value = None
+
+            channel_value: Optional[int] = None
+            if metadata_entry is not None:
+                channel_value = metadata_entry.get("channels")  # type: ignore[assignment]
+            try:
+                channel_value = int(channel_value) if channel_value is not None else None
+            except (TypeError, ValueError):
+                channel_value = None
+
+            duration_value: Optional[float] = None
+            if metadata_entry is not None:
+                duration_value = metadata_entry.get("duration")  # type: ignore[assignment]
+            try:
+                duration_value = float(duration_value) if duration_value is not None else None
+            except (TypeError, ValueError):
+                duration_value = None
+
+            language_value: Optional[str] = None
+            if metadata_entry is not None:
+                language_raw = metadata_entry.get("language")
+                language_value = str(language_raw) if language_raw is not None else None
+
             artifacts.append(
                 {
                     "role": "audio",
@@ -320,8 +364,11 @@ def build_matanyone_artifacts(
                     "container": entry_container,
                     "codec": entry_codec,
                     "frames": None,
-                    "duration_s": None,
+                    "duration_s": duration_value,
                     "metadata_sidecar": metadata_sidecar,
+                    "sample_rate": sample_rate_value,
+                    "channels": channel_value,
+                    "language": language_value,
                 }
             )
         capture_index.pop((kind, resolved), None)

@@ -9,10 +9,10 @@
 
 ## MatAnyOne Pipeline
 
-- `preprocessing/matanyone/app.py` is a headless pipeline that assumes on-disk source media/masks and GPU availability. `_persist_audio_artifacts` now decodes extracted AAC tracks via `ffmpeg` into float32 arrays, persists them through `MediaPersistenceContext.save_audio`, and records per-track metadata (sample rate, channels, language, source codec) back into `MatAnyOneResult.metadata["audio_tracks"]`. JSON sidecars are written for each persisted audio artifact when the request runs in `metadata_mode=json`.
+- `preprocessing/matanyone/app.py` is a headless pipeline that assumes on-disk source media/masks and GPU availability. `_persist_audio_artifacts` now decodes extracted AAC tracks via `ffmpeg` into float32 arrays, persists them through `MediaPersistenceContext.save_audio`, and records per-track metadata (sample rate, derived duration, channels, language, source codec) back into `MatAnyOneResult.metadata["audio_tracks"]`. JSON sidecars are written for each persisted audio artifact when the request runs in `metadata_mode=json`, mirroring the CLI logs.
 - `cli/matanyone.py` wraps the pipeline with logging, input validation, frame/mask/audio controls, optional dry-run mode, and forwards requests to `generate_masks` using the shared CLI notifier. When `wgp` is available the CLI clones both `ProductionManager.metadata_state()` and `media_context()` so MatAnyOne writes metadata with the same templates and persists media through the shared context. Outputs land under `mask_outputs/` with container/codec overrides pulled from `server_config`; RGBA ZIP bundles now respect the context `save_masks` toggle while audio tracks are reattached onto the resolved container when requested.
 - `tests/test_matanyone_persistence.py` guards the context-driven persistence flow by asserting video saves honour codec/container overrides, audio artifacts persist through `MediaPersistenceContext.save_audio` with per-track sample rates/languages, and mask archives follow the `save_masks` gating.
-- `tests/test_matanyone_cli_integration.py` exercises the CLI end-to-end, patching the heavy pipeline while asserting the manifest records `mask_foreground`, `mask_alpha`, `rgba_archive`, and `audio` artifacts plus expected metadata sidecars.
+- `tests/test_matanyone_cli_integration.py` exercises the CLI end-to-end, patching the heavy pipeline while asserting the manifest records `mask_foreground`, `mask_alpha`, `rgba_archive`, and `audio` artifacts plus expected metadata sidecars and audio metadata fields (`sample_rate`, `duration_s`, `language`, `channels`).
 
 ## Metadata & IO
 
@@ -31,7 +31,7 @@
 - The legacy `shared.utils.audio_video.save_*` adapters have been deleted; any lagging preprocessors must migrate to `MediaPersistenceContext` or call `core.io.media.write_*` directly to preserve logging and retry behaviour.
 - `shared.utils.utils.save_image` has been removed; any tensor-to-image persistence flows must route through `MediaPersistenceContext.save_image` or `core.io.media.write_image` so retry/logging semantics stay consistent.
 - Remaining `models/wan` video utilities (`fantasytalking`, `multitalk`) now call `core.io.media.write_video`, keeping preprocessing helpers aligned with the CLI persistence stack instead of hand-rolled `imageio` writers.
-- The MatAnyOne manifest recorder captures audio artifacts when reattaching source tracks; the CLI integration suite asserts the JSONL rows include `audio` roles with codec/container metadata alongside the mask entries.
+- The MatAnyOne manifest recorder captures audio artifacts when reattaching source tracks; the CLI integration suite asserts the JSONL rows include `audio` roles with codec/container metadata plus `sample_rate`, `duration_s`, `language`, and `channels`.
 
 ## Pending Extraction Work
 
