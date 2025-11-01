@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 from core.lora.manager import LoRAInjectionManager
-from core.prompt_enhancer.bridge import PromptEnhancerBridge, PromptEnhancerSpec
+from core.prompt_enhancer.bridge import (
+    PromptEnhancerBridge,
+    PromptEnhancerSpec,
+    PromptEnhancerContext,
+)
 from core.task_inputs import TaskInputManager
 from shared.notifications import GenerationNotifier
 from core.io.media import (
@@ -129,9 +133,67 @@ class GenerationRuntime:
                         else:
                             server_config[key] = previous
 
+    def _ensure_adapter_payloads_dict(self) -> Dict[str, Any]:
+        payloads = self.adapter_payloads
+        if isinstance(payloads, dict):
+            return payloads
+        payloads = {}
+        self.adapter_payloads = payloads
+        return payloads
+
+    def _build_prompt_enhancer_context(self, params: Dict[str, Any]) -> PromptEnhancerContext:
+        prompt_text = params.get("prompt")
+        if not isinstance(prompt_text, str):
+            prompt_text = "" if prompt_text is None else str(prompt_text)
+        prompt_lines = [line for line in (prompt_text.split("\n")) if line.strip()]
+
+        image_start_value = params.get("image_start")
+        if image_start_value is None:
+            image_start_seq = None
+        elif isinstance(image_start_value, (list, tuple)):
+            image_start_seq = list(image_start_value)
+        else:
+            image_start_seq = [image_start_value]
+
+        image_refs_value = params.get("image_refs")
+        if image_refs_value is None:
+            image_refs_seq = None
+        elif isinstance(image_refs_value, (list, tuple)):
+            image_refs_seq = list(image_refs_value)
+        else:
+            image_refs_seq = [image_refs_value]
+
+        is_image = bool(params.get("image_mode", 0) > 0)
+        audio_only = False
+        model_type = params.get("model_type")
+        if isinstance(model_type, str):
+            get_model_def = getattr(self.wgp, "get_model_def", None)
+            if callable(get_model_def):
+                try:
+                    model_def = get_model_def(model_type)
+                except Exception:  # pragma: no cover - defensive
+                    model_def = None
+                if isinstance(model_def, dict):
+                    audio_only = bool(model_def.get("audio_only", False))
+
+        seed_value = params.get("seed", -1)
+        try:
+            seed_int = int(seed_value)
+        except (TypeError, ValueError):
+            seed_int = -1
+
+        return PromptEnhancerContext(
+            prompts=prompt_lines,
+            image_start=image_start_seq,
+            image_refs=image_refs_seq,
+            is_image=is_image,
+            audio_only=audio_only,
+            seed=seed_int,
+        )
+
     def run(self, params: Dict[str, Any], send_cmd: SendCommand) -> List[str]:
         task = self.build_task(params)
-        self._apply_adapter_payloads(params)
+        self._apply_adapter_payloads(params, send_cmd)
         with self.apply_runtime_overrides():
             self.wgp.generate_video(
                 task,
@@ -148,13 +210,16 @@ class GenerationRuntime:
         outputs = gen_state.get("file_list", []) or []
         return list(outputs)
 
-    def _apply_adapter_payloads(self, params: Dict[str, Any]) -> None:
-        payloads = self.adapter_payloads if isinstance(self.adapter_payloads, dict) else {}
+    def _apply_adapter_payloads(
+        self,
+        params: Dict[str, Any],
+        send_cmd: Optional[SendCommand],
+    ) -> None:
+        payloads = self._ensure_adapter_payloads_dict()
         model_type = params.get("model_type")
         lora_payload = payloads.get("lora")
-        prompt_payload = payloads.get("prompt_enhancer")
 
-        if lora_payload and isinstance(lora_payload, dict) and isinstance(model_type, str):
+        if isinstance(lora_payload, dict) and isinstance(model_type, str):
             manager = self.lora_manager
             if manager is not None:
                 try:
@@ -169,21 +234,28 @@ class GenerationRuntime:
             if multipliers is not None and not params.get("loras_multipliers"):
                 params["loras_multipliers"] = multipliers
 
-        bridge = self.prompt_enhancer
+        server_config = getattr(self.wgp, "server_config", None)
         prompt_selection = params.get("prompt_enhancer")
-        force_prime = False
-        if prompt_payload and isinstance(prompt_payload, dict):
+        prompt_payload_candidate = payloads.get("prompt_enhancer")
+        prompt_payload: Optional[Dict[str, Any]] = (
+            prompt_payload_candidate if isinstance(prompt_payload_candidate, dict) else None
+        )
+        force_prime = bool(prompt_payload.get("force", False)) if prompt_payload else False
+        if isinstance(server_config, dict) and prompt_payload:
             provider = prompt_payload.get("provider")
             enhancer_mode = prompt_payload.get("enhancer_mode")
-            force_prime = bool(prompt_payload.get("force", False))
-            server_config = getattr(self.wgp, "server_config", None)
-            if isinstance(server_config, dict):
-                if provider is not None:
-                    server_config["enhancer_enabled"] = provider
-                if enhancer_mode is not None:
-                    server_config["enhancer_mode"] = enhancer_mode
+            if provider is not None:
+                server_config["enhancer_enabled"] = provider
+            if enhancer_mode is not None:
+                server_config["enhancer_mode"] = enhancer_mode
+
+        bridge = self.prompt_enhancer
         if bridge is not None:
             if prompt_selection:
+                if prompt_payload is None:
+                    prompt_payload = {}
+                    payloads["prompt_enhancer"] = prompt_payload
+
                 get_handles = getattr(self.wgp, "get_prompt_enhancer_runtime_handles", None)
                 pipe = kwargs = None
                 if callable(get_handles):
@@ -202,7 +274,44 @@ class GenerationRuntime:
                         bridge.prime(spec)
                     except Exception:  # pragma: no cover - defensive
                         pass
+
+                should_refresh = force_prime or not prompt_payload.get("enhanced_prompts")
+                enhancer_mode_active = True
+                if isinstance(server_config, dict):
+                    enhancer_mode_active = int(server_config.get("enhancer_mode", 0) or 0) == 0
+
+                if should_refresh and enhancer_mode_active:
+                    context = self._build_prompt_enhancer_context(params)
+                    status_message = "Enhancing Prompt"
+                    status_builder = getattr(self.wgp, "get_latest_status", None)
+                    if callable(status_builder):
+                        try:
+                            status_message = status_builder(self.state, "Enhancing Prompt")
+                        except Exception:  # pragma: no cover - defensive
+                            status_message = "Enhancing Prompt"
+                    if send_cmd is not None:
+                        try:
+                            send_cmd("progress", [0, status_message])
+                        except Exception:  # pragma: no cover - defensive
+                            pass
+                    try:
+                        enhanced = bridge.enhance(prompt_selection, context)
+                    except Exception as exc:  # pragma: no cover - defensive
+                        prompt_payload.setdefault("errors", []).append(str(exc))
+                    else:
+                        if enhanced:
+                            prompt_payload["enhanced_prompts"] = list(enhanced)
+                            prompt_payload["context"] = {
+                                "seed": context.seed,
+                                "source_prompts": list(context.prompts),
+                                "is_image": context.is_image,
+                                "audio_only": context.audio_only,
+                            }
+                        else:
+                            prompt_payload.pop("enhanced_prompts", None)
             else:
+                if prompt_payload is not None:
+                    prompt_payload.pop("enhanced_prompts", None)
                 try:
                     bridge.reset()
                 except Exception:  # pragma: no cover - defensive

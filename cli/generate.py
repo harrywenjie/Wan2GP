@@ -53,6 +53,23 @@ def import_wgp():
     return wgp
 
 
+def reset_adapter_caches(
+    manager: ProductionManager,
+    *,
+    reset_lora: bool,
+    reset_prompt_enhancer: bool,
+    logger: Logger,
+) -> None:
+    """Apply adapter reset flags against the provided production manager."""
+
+    if reset_lora:
+        logger.info("Resetting LoRA adapter cache before discovery.")
+        manager.lora_manager().reset()
+    if reset_prompt_enhancer:
+        logger.info("Resetting prompt enhancer bridge before generation.")
+        manager.prompt_enhancer().reset()
+
+
 def validate_input_paths(args: Namespace) -> None:
     """Ensure every provided file-based argument points to an existing file."""
     path_flags = {
@@ -722,12 +739,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         wgp.transformer_dtype_policy,
     )
     bootstrap_manager = ProductionManager(wgp_module=wgp)
-    if args.reset_lora_cache:
-        logger.info("Resetting LoRA adapter cache before discovery.")
-        bootstrap_manager.lora_manager().reset()
-    if args.reset_prompt_enhancer:
-        logger.info("Resetting prompt enhancer bridge before generation.")
-        bootstrap_manager.prompt_enhancer().reset()
+    reset_adapter_caches(
+        bootstrap_manager,
+        reset_lora=args.reset_lora_cache,
+        reset_prompt_enhancer=args.reset_prompt_enhancer,
+        logger=logger,
+    )
     lora_manager = bootstrap_manager.lora_manager()
     preselected_for_discovery = "" if args.lora_preset else None
     if args.lora_preset:

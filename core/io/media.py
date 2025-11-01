@@ -132,6 +132,60 @@ class MediaPersistenceContext:
 
         return self.save_debug_masks
 
+    def save_video(
+        self,
+        data: Any,
+        target_path: Optional[str],
+        *,
+        logger: Optional[LoggerCallable] = None,
+        config: Optional[VideoSaveConfig] = None,
+        overrides: Optional[Mapping[str, Any]] = None,
+    ) -> Optional[str]:
+        """
+        Persist a video artifact using either the provided config or template overrides.
+        """
+
+        effective_config: VideoSaveConfig
+        if config is None:
+            effective_config = self.video_config(**dict(overrides or {}))
+        else:
+            effective_config = replace(config)
+            effective_config.extra_params = dict(config.extra_params)
+            if overrides:
+                fields = effective_config.__dataclass_fields__
+                for key, value in overrides.items():
+                    if key not in fields:
+                        raise AttributeError(f"VideoSaveConfig has no field named '{key}'")
+                    setattr(effective_config, key, value)
+        return write_video(data, target_path, config=effective_config, logger=logger)
+
+    def save_image(
+        self,
+        data: Any,
+        target_path: str,
+        *,
+        logger: Optional[LoggerCallable] = None,
+        config: Optional[ImageSaveConfig] = None,
+        overrides: Optional[Mapping[str, Any]] = None,
+    ) -> str:
+        """
+        Persist an image artifact using either the provided config or template overrides.
+        """
+
+        effective_config: ImageSaveConfig
+        if config is None:
+            effective_config = self.image_config(**dict(overrides or {}))
+        else:
+            effective_config = replace(config)
+            effective_config.extra_params = dict(config.extra_params)
+            if overrides:
+                fields = effective_config.__dataclass_fields__
+                for key, value in overrides.items():
+                    if key not in fields:
+                        raise AttributeError(f"ImageSaveConfig has no field named '{key}'")
+                    setattr(effective_config, key, value)
+        return write_image(data, target_path, config=effective_config, logger=logger)
+
 
 def build_media_context(server_config: Mapping[str, Any]) -> MediaPersistenceContext:
     """

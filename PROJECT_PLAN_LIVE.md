@@ -48,9 +48,9 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ---
 
 ## Immediate Next Actions
-- Replace the remaining video/image persistence calls inside `wgp.generate_video` with `MediaPersistenceContext` helpers supplied by `ProductionManager`.
-- Move prompt enhancer activation fully behind the bridge by routing `process_prompt_enhancer` callers through adapter payloads and retiring the legacy globals.
-- Add smoke coverage (CLI or queue harness) for the new adapter reset flags to guard cache-clearing regressions.
+- Route residual audio/mask persistence paths in `wgp.generate_video` through context-managed helpers to finish IO parity.
+- Extend CLI/headless docs with the new prompt enhancer payload handoff and media-context persistence expectations.
+- Add queue/CLI smoke coverage that asserts enhanced prompt payloads propagate into metadata snapshots and saved tasks.
 
 ---
 

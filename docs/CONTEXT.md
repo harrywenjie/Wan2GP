@@ -18,7 +18,7 @@
 - `ProductionManager.metadata_state()` returns a per-run `MetadataState` snapshot (choice + cloned templates). `GenerationRuntime` forwards the snapshot to `wgp.generate_video`, replacing the old module-level `metadata_choice` / `metadata_configs`.
 - `_resolve_metadata_config` accepts either the dataclass or a dict for backward compatibility. CLI runs still honour `--metadata-mode`; MatAnyOne now passes the cloned `MetadataState` snapshot directly into its writers so embedded metadata and JSON sidecars stay aligned with the core generation pipeline.
 - Embedded source images for metadata remain gated by `server_config["embed_source_images"]`; JSON sidecars are emitted when `metadata_mode=json`.
-- `core.io.media.MediaPersistenceContext` now captures the video/image persistence templates plus the legacy `save_masks` debug toggle. `ProductionManager.media_context()` builds a fresh instance from `server_config` for each run and passes it through `GenerationRuntime` to `wgp.generate_video` (the legacy module ignores the payload for now, pending call-site refactors).
+- `core.io.media.MediaPersistenceContext` now captures the video/image persistence templates plus the legacy `save_masks` debug toggle. `ProductionManager.media_context()` builds a fresh instance from `server_config` for each run and passes it through `GenerationRuntime` to `wgp.generate_video`, which now routes video/image saves through the context helpers while retaining the legacy wrappers as a fallback.
 
 ## Pending Extraction Work
 
@@ -43,11 +43,11 @@
 - **Implementation phases**
   1. (done) Adapter shims plus smoke tests landed (`tests/test_lora_manager.py`, `tests/test_prompt_enhancer_bridge.py`).
   2. (done) `ProductionManager`, `TaskInputManager`, and the CLI now depend on the adapters; `wgp` remains the execution backend for activation.
-  3. (done) Runtime execution now consumes adapter payloads inside `wgp.generate_video`, eliminating the `state["loras"]` mutation and routing prompt enhancer priming through the bridge primer instead of direct `setup_prompt_enhancer` calls.
+  3. (done) Runtime execution now consumes adapter payloads inside `wgp.generate_video`, eliminating the `state["loras"]` mutation and routing prompt enhancer priming through the bridge primer instead of direct `setup_prompt_enhancer` calls. Prompt enhancement is computed by `GenerationRuntime` via the bridge and delivered through `adapter_payloads`, so `wgp.generate_video` no longer invokes `process_prompt_enhancer` directly.
   4. (planned) Replace the remaining persistence helpers and inline enhancer utilities in `wgp` so the CLI runner can assume full control without touching legacy globals.
 
 ## ProductionManager Dependency Snapshot
 
-- Runtime prep: relies on `wgp` for `wan_model`, `transformer_type`, `reload_needed`, and `load_models` to hydrate models on demand.
+- Runtime prep: relies on `wgp` for `wan_model`, `transformer_type`, `reload_needed`, and `load_models` to hydrate models on demand. Prompt enhancement sequences are expected to arrive via `adapter_payloads["prompt_enhancer"]`, allowing the legacy module to avoid touching enhancer globals during execution.
 - Task inputs: still call through `wgp` helpers for model metadata (`get_model_record`, `get_model_family`, compatibility testers), settings writers, notifications, and the shared `lock`.
-- Output persistence: now uses `core.io.get_available_filename` but still leans on `wgp` for some inline save helpers; further IO extraction should remove these touchpoints.
+- Output persistence: `MediaPersistenceContext.save_video/save_image` now cover the legacy save sites while still leaning on `wgp` for filename allocation and a few inline helpers pending full extraction.

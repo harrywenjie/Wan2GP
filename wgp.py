@@ -75,7 +75,7 @@ import gc
 import traceback
 import math 
 import typing
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 import inspect
 from shared.utils import prompt_parser
 import base64
@@ -2594,7 +2594,11 @@ def edit_video(
             normalize=True,
             value_range=(-1, 1),
         )
-        save_video(tensor=sample[None], save_file=video_path, config=video_config)
+        _save_video_artifact(
+            sample[None],
+            video_path,
+            config=video_config,
+        )
 
         if any_mmaudio or has_already_audio: tmp_path = video_path
         any_change = True
@@ -2928,6 +2932,68 @@ def generate_video(
             return True
         return bool(server_config.get("save_masks", False))
 
+    def _save_video_artifact(
+        data,
+        target_path,
+        *,
+        config: Optional[VideoSaveConfig] = None,
+        overrides: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        logger = get_notifications_logger()
+        context = media_context
+        if context is not None and hasattr(context, "save_video"):
+            try:
+                return context.save_video(
+                    data,
+                    target_path,
+                    logger=logger,
+                    config=config,
+                    overrides=overrides,
+                )
+            except AttributeError:
+                pass
+        effective_config = config
+        if effective_config is None:
+            override_kwargs = dict(overrides or {})
+            effective_config = resolve_video_config(**override_kwargs)
+        return save_video(
+            tensor=data,
+            save_file=target_path,
+            config=effective_config,
+            logger=logger,
+        )
+
+    def _save_image_artifact(
+        data,
+        target_path,
+        *,
+        config: Optional[ImageSaveConfig] = None,
+        overrides: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        logger = get_notifications_logger()
+        context = media_context
+        if context is not None and hasattr(context, "save_image"):
+            try:
+                return context.save_image(
+                    data,
+                    target_path,
+                    logger=logger,
+                    config=config,
+                    overrides=overrides,
+                )
+            except AttributeError:
+                pass
+        effective_config = config
+        if effective_config is None:
+            override_kwargs = dict(overrides or {})
+            effective_config = resolve_image_config(**override_kwargs)
+        return save_image(
+            data,
+            save_file=target_path,
+            config=effective_config,
+            logger=logger,
+        )
+
     torch.set_grad_enabled(False) 
     if mode.startswith("edit_"):
         edit_video(send_cmd, state, mode, video_source, seed, temporal_upsampling, spatial_upsampling, film_grain_intensity, film_grain_saturation, MMAudio_setting, MMAudio_prompt, MMAudio_neg_prompt, repeat_generation, audio_source)
@@ -3023,6 +3089,33 @@ def generate_video(
         raw_lora_payload = adapter_payloads.get("lora")
         if isinstance(raw_lora_payload, dict):
             lora_payload = raw_lora_payload
+    prompt_payload: Dict[str, Any] = {}
+    enhanced_prompt_list: Optional[List[str]] = None
+    prompt_payload_errors: List[str] = []
+    if isinstance(adapter_payloads, dict):
+        raw_prompt_payload = adapter_payloads.get("prompt_enhancer")
+        if isinstance(raw_prompt_payload, dict):
+            prompt_payload = raw_prompt_payload
+            maybe_enhanced = raw_prompt_payload.get("enhanced_prompts")
+            if isinstance(maybe_enhanced, (list, tuple)):
+                extracted = [
+                    str(item)
+                    for item in maybe_enhanced
+                    if isinstance(item, str) and item.strip()
+                ]
+                if extracted:
+                    enhanced_prompt_list = extracted
+            maybe_errors = raw_prompt_payload.get("errors")
+            if isinstance(maybe_errors, (list, tuple)):
+                prompt_payload_errors = [
+                    str(item)
+                    for item in maybe_errors
+                    if item is not None and str(item)
+                ]
+    if prompt_payload_errors:
+        notify_warning(
+            "Prompt enhancer bridge reported errors: " + "; ".join(prompt_payload_errors)
+        )
     payload_available_loras = list(lora_payload.get("available", []) or [])
     payload_activated_loras = list(lora_payload.get("activated", []) or [])
     payload_multipliers = lora_payload.get("multipliers")
@@ -3265,6 +3358,7 @@ def generate_video(
     first_window_video_length = current_video_length
     original_prompts = prompts.copy()
     gen["sliding_window"] = sliding_window 
+    enhanced_prompts_consumed_any = False
     while not abort: 
         extra_generation += gen.get("extra_orders",0)
         gen["extra_orders"] = 0
@@ -3295,15 +3389,18 @@ def generate_video(
         num_frames_generated = 0 # num of new frames created (lower than the number of frames really processed due to overlaps and discards)
         requested_frames_to_generate = default_requested_frames_to_generate # num  of num frames to create (if any source window this num includes also the overlapped source window frames)
         start_time = time.time()
-        if prompt_enhancer_image_caption_model != None and prompt_enhancer !=None and len(prompt_enhancer)>0 and server_config.get("enhancer_mode", 0) == 0:
-            send_cmd("progress", [0, get_latest_status(state, "Enhancing Prompt")])
-            enhanced_prompts = process_prompt_enhancer(prompt_enhancer, original_prompts,  image_start, original_image_refs, is_image, audio_only, seed )
-            if enhanced_prompts is not None:
-                print(f"Enhanced prompts: {enhanced_prompts}" )
-                task["prompt"] = "\n".join(["!enhanced!"] + enhanced_prompts)
-                send_cmd("output")
-                prompt = enhanced_prompts[0]            
-                abort = gen.get("abort", False)
+        if (
+            enhanced_prompt_list
+            and prompt_enhancer is not None
+            and len(prompt_enhancer) > 0
+            and server_config.get("enhancer_mode", 0) == 0
+        ):
+            print(f"Enhanced prompts: {enhanced_prompt_list}")
+            task["prompt"] = "\n".join(["!enhanced!"] + enhanced_prompt_list)
+            send_cmd("output")
+            prompts = list(enhanced_prompt_list)
+            enhanced_prompts_consumed_any = True
+            abort = gen.get("abort", False)
 
         while not abort:
             enable_RIFLEx = RIFLEx_setting == 0 and current_video_length > (6* get_model_fps(base_model_type)+1) or RIFLEx_setting == 1
@@ -3527,16 +3624,32 @@ def generate_video(
                     if should_save_debug_masks():
                         if src_video is not None:
                             debug_video_config = resolve_video_config(fps=fps)
-                            save_video(src_video, "masked_frames.mp4", config=debug_video_config)
+                            _save_video_artifact(
+                                src_video,
+                                "masked_frames.mp4",
+                                config=debug_video_config,
+                            )
                             if any_mask:
                                 debug_mask_config = resolve_video_config(fps=fps, value_range=(0, 1))
-                                save_video(src_mask, "masks.mp4", config=debug_mask_config)
+                                _save_video_artifact(
+                                    src_mask,
+                                    "masks.mp4",
+                                    config=debug_mask_config,
+                                )
                         if src_video2 is not None:
                             debug_video_config = resolve_video_config(fps=fps)
-                            save_video(src_video2, "masked_frames2.mp4", config=debug_video_config)
+                            _save_video_artifact(
+                                src_video2,
+                                "masked_frames2.mp4",
+                                config=debug_video_config,
+                            )
                             if any_mask:
                                 debug_mask_config = resolve_video_config(fps=fps, value_range=(0, 1))
-                                save_video(src_mask2, "masks2.mp4", config=debug_mask_config)
+                                _save_video_artifact(
+                                    src_mask2,
+                                    "masks2.mp4",
+                                    config=debug_mask_config,
+                                )
                 if video_guide is not None:                        
                     preview_frame_no = 0 if extract_guide_from_window_start or model_def.get("dont_cat_preguide", False) or sparse_video_image is not None else (guide_start_frame - window_start_frame) 
                     preview_frame_no = min(src_video.shape[1] -1, preview_frame_no)
@@ -3846,7 +3959,13 @@ def generate_video(
                     image_config_for_outputs = image_config
                     for no, img in enumerate(sample):  
                         img_path = os.path.splitext(image_path)[0] + ("" if no==0 else f"_{no}") + ".jpg" 
-                        new_image_path.append(save_image(img, save_file=img_path, config=image_config))
+                        new_image_path.append(
+                            _save_image_artifact(
+                                img,
+                                img_path,
+                                config=image_config,
+                            )
+                        )
 
                     video_path= new_image_path
                 elif len(control_audio_tracks) > 0 or len(source_audio_tracks) > 0 or output_new_audio_filepath is not None or any_mmaudio or output_new_audio_data is not None or audio_source is not None:
@@ -3860,9 +3979,9 @@ def generate_video(
                     video_config_for_outputs = video_config
                     container = video_config.container or base_container or "mp4"
                     save_path_tmp = video_path.rsplit('.', 1)[0] + f"_tmp.{container}"
-                    save_video(
-                        tensor=sample[None],
-                        save_file=save_path_tmp,
+                    _save_video_artifact(
+                        sample[None],
+                        save_path_tmp,
                         config=video_config,
                     )
                     output_new_audio_temp_filepath = None
@@ -3899,9 +4018,9 @@ def generate_video(
                     )
                     video_config_for_outputs = video_config
                     container = video_config.container or base_container or "mp4"
-                    save_video(
-                        tensor=sample[None],
-                        save_file=video_path,
+                    _save_video_artifact(
+                        sample[None],
+                        video_path,
                         config=video_config,
                     )
 
@@ -3941,8 +4060,8 @@ def generate_video(
                 configs = prepare_inputs_dict("metadata", inputs, model_type)
                 if sliding_window: configs["window_no"] = window_no
                 configs["prompt"] = "\n".join(original_prompts)
-                if prompt_enhancer_image_caption_model != None and prompt_enhancer !=None and len(prompt_enhancer)>0:
-                    configs["enhanced_prompt"] = "\n".join(prompts)
+                if enhanced_prompts_consumed_any and enhanced_prompt_list:
+                    configs["enhanced_prompt"] = "\n".join(enhanced_prompt_list)
                 configs["generation_time"] = round(end_time-start_time)
                 # if is_image: configs["is_image"] = True
                 metadata_mode = (
