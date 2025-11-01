@@ -50,12 +50,12 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ---
 
 ## Immediate Next Actions
-- Backfill MatAnyOne persistence tests exercising MediaPersistenceContext overrides and `save_masks` gating.
-  - **Proposal (2025-11-01)**: Add focused unit coverage that mocks the context to confirm codec/container overrides, audio pass-through, and mask archive skip/emit logic, ensuring future refactors preserve the new behaviour.
-  - **Rationale**: Codifies the headless persistence expectations so regressions in MatAnyOne output handling are caught automatically.
 - Define a lightweight artifact manifest spec for CLI runs (JSONL or per-run summary) that captures saved paths, metadata mode, and adapter payload hashes.
   - **Proposal (2025-11-04)**: Draft a minimal schema, prototype emission in dry-run mode, and socialise with operators before wiring into `cli.generate`.
   - **Rationale**: Replaces ad-hoc logging with machine-readable manifests, improving reproducibility audits and integration with external schedulers.
+- Extend MatAnyOne persistence coverage to the audio reattachment path so container overrides remain stable when tracks are merged.
+  - **Proposal (2025-11-05)**: Mock the audio mux helpers and assert temp artifact cleanup plus container/codec propagation when `audio_tracks` are supplied.
+  - **Rationale**: Locks in the context-aware audio flow and prevents regressions when the queue runner changes mux orchestration.
 - Plan the removal of legacy `save_video`/`save_image` wrappers once all call sites use `MediaPersistenceContext`.
   - **Proposal (2025-11-04)**: Audit remaining usages, enumerate blockers, and sketch a deprecation timeline so the wrappers can disappear when the runner extraction lands.
   - **Rationale**: Eliminating the wrappers reduces duplication, making the context the single persistence surface and simplifying future refactors.
