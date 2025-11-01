@@ -10,7 +10,7 @@
 ## MatAnyOne Pipeline
 
 - `preprocessing/matanyone/app.py` is a headless pipeline that assumes on-disk source media/masks and GPU availability.
-- `cli/matanyone.py` wraps the pipeline with logging, input validation, frame/mask/audio controls, optional dry-run mode, and forwards requests to `generate_masks` using the shared CLI notifier. When `wgp` is available the CLI clones `ProductionManager.metadata_state()` so MatAnyOne writes metadata with the same templates as the main generation path. Outputs land under `mask_outputs/` with optional RGBA ZIP bundles and audio reattachment when requested.
+- `cli/matanyone.py` wraps the pipeline with logging, input validation, frame/mask/audio controls, optional dry-run mode, and forwards requests to `generate_masks` using the shared CLI notifier. When `wgp` is available the CLI clones both `ProductionManager.metadata_state()` and `media_context()` so MatAnyOne writes metadata with the same templates and persists media through the shared context. Outputs land under `mask_outputs/` with container/codec overrides pulled from `server_config`; RGBA ZIP bundles now respect the context `save_masks` toggle while audio tracks are reattached onto the resolved container when requested.
 
 ## Metadata & IO
 

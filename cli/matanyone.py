@@ -6,12 +6,17 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Tuple
 
 from cli.telemetry import configure_logging
 from shared.utils.notifications import configure_notifications
 from preprocessing.matanyone.app import MatAnyOneRequest, generate_masks
 from core.production_manager import MetadataState, ProductionManager
+
+try:  # Optional import for typing without runtime dependency
+    from core.io.media import MediaPersistenceContext
+except Exception:  # pragma: no cover - typing fallback
+    MediaPersistenceContext = None  # type: ignore
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -128,26 +133,43 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _resolve_metadata_state(logger, metadata_choice: str) -> Optional[MetadataState]:
+def _resolve_runtime_contexts(
+    logger,
+    metadata_choice: str,
+) -> Tuple[Optional[MetadataState], Optional["MediaPersistenceContext"]]:
+    metadata_state: Optional[MetadataState] = None
+    media_context: Optional["MediaPersistenceContext"] = None
+
     try:
         import wgp  # type: ignore  # pylint: disable=import-error
     except Exception as exc:  # pragma: no cover - import failure depends on environment
-        logger.debug("MatAnyOne metadata state unavailable (import error): %s", exc)
-        return None
+        logger.debug("MatAnyOne runtime contexts unavailable (import error): %s", exc)
+        return metadata_state, media_context
 
     if hasattr(wgp, "ensure_runtime_initialized"):
         try:
             wgp.ensure_runtime_initialized()
         except Exception as exc:  # pragma: no cover - runtime init is environment-specific
-            logger.debug("MatAnyOne metadata state unavailable (runtime init): %s", exc)
-            return None
+            logger.debug("MatAnyOne runtime contexts unavailable (runtime init): %s", exc)
+            return metadata_state, media_context
 
     try:
         manager = ProductionManager(wgp_module=wgp)
-        return manager.metadata_state(choice_override=metadata_choice)
     except Exception as exc:  # pragma: no cover - ProductionManager surface may evolve
-        logger.debug("MatAnyOne metadata state unavailable (manager error): %s", exc)
-        return None
+        logger.debug("MatAnyOne runtime contexts unavailable (manager error): %s", exc)
+        return metadata_state, media_context
+
+    try:
+        metadata_state = manager.metadata_state(choice_override=metadata_choice)
+    except Exception as exc:  # pragma: no cover - ProductionManager surface may evolve
+        logger.debug("MatAnyOne metadata state unavailable (metadata error): %s", exc)
+
+    try:
+        media_context = manager.media_context()
+    except Exception as exc:  # pragma: no cover - context wiring depends on runtime state
+        logger.debug("MatAnyOne media context unavailable (context error): %s", exc)
+
+    return metadata_state, media_context
 
 
 def _resolve_path(path: Path, description: str) -> Path:
@@ -164,7 +186,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     logger = configure_logging(args.log_level)
     configure_notifications(logger)
 
-    metadata_state = _resolve_metadata_state(logger, args.metadata_mode)
+    metadata_state, media_context = _resolve_runtime_contexts(logger, args.metadata_mode)
     metadata_mode = (
         metadata_state.choice if metadata_state and metadata_state.choice else args.metadata_mode
     )
@@ -187,6 +209,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             codec=args.codec,
             metadata_mode=metadata_mode,
             metadata_state=metadata_state,
+            media_context=media_context,
             notifier=logger.info,
         )
     except SystemExit:

@@ -137,11 +137,11 @@ python -m cli.matanyone \
 - `--start-frame INT` / `--end-frame INT` – clamp the processed frame window (end is exclusive; omit to process the full clip).
 - `--new-dim SPEC` – resize directive understood by the MatAnyOne pipeline (e.g. `1080p outer`).
 - `--matting {foreground,background}` – choose whether the mask represents the foreground (default) or background region.
-- `--mask-type {wangp,greenscreen,alpha}` – select the output format: raw mask pair, composited greenscreen, or RGBA ZIP bundle.
+- `--mask-type {wangp,greenscreen,alpha}` – select the output format: raw mask pair, composited greenscreen, or an RGBA ZIP bundle (saved only when the active `server_config` enables `save_masks`).
 - `--erode-kernel INT` / `--dilate-kernel INT` – morphology kernel sizes to refine the mask.
 - `--warmup-frames INT` – warm-up frame count for stabilising propagation (default `10`).
 - `--device TEXT` – execution device (e.g. `cuda`, `cuda:1`, `cpu`).
-- `--codec TEXT` – FFmpeg codec string used when writing MP4 outputs (default `libx264_8`).
+- `--codec TEXT` – override the video codec used by the persistence context (defaults to the configured `server_config.video_output_codec`, falling back to `libx264_8`).
 - `--metadata-mode {metadata,json}` – choose whether the foreground/alpha MP4s embed metadata or emit JSON sidecars. Defaults to `metadata`.
 - `--no-audio` – skip audio track reattachment when the source includes audio.
 
@@ -153,10 +153,10 @@ When `wgp` is available, the CLI requests `ProductionManager.metadata_state()` (
 
 ### Outputs
 Successful runs log the written file paths and echo them to STDOUT. Expect:
-- Foreground MP4 (`<prefix>.mp4`)
-- Alpha MP4 (`<prefix>_alpha.mp4`)
-- Optional RGBA ZIP archive when `--mask-type alpha` is selected.
+- Foreground video (`<prefix><mask-suffix>.<container>`) using the container configured in `server_config` (defaults to `mp4`).
+- Alpha companion (`<prefix>_alpha.<container>`), persisted with the same codec/container defaults.
+- Optional RGBA ZIP archive when `--mask-type alpha` is selected **and** `save_masks` is enabled in the active `MediaPersistenceContext`.
 
-All persistence flows through `core.io.media.MediaPersistenceContext`: video and image saves reuse the configured codecs, audio-only runs emit `.wav` files with the resolved sample rate, and mask archives honour the `--save-masks` flag. Failures are retried with logger feedback so automation can detect and react to IO issues deterministically.
+MatAnyOne now threads the per-run `MediaPersistenceContext` supplied by `ProductionManager`. Video writes honour container/codec overrides (with `--codec` acting as a per-run override), audio tracks are reattached onto the context-derived container, and mask archives respect the `save_masks` toggle so debug bundles only materialise when explicitly configured. Persistence helpers retain retry logging so automation can detect and react to IO errors deterministically.
 
 For architectural notes and migration history consult `PROJECT_PLAN_LIVE.md`. External scripts may reuse the bootstrap directly via `import wgp; wgp.ensure_runtime_initialized()` before calling lower level helpers.

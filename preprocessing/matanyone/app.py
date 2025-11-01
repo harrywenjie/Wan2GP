@@ -21,7 +21,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from core.io.media import build_metadata_config, write_metadata_bundle
+from core.io.media import MediaPersistenceContext, build_metadata_config, write_metadata_bundle
 from core.production_manager import MetadataState
 from shared.utils import files_locator as fl
 from shared.utils.audio_video import (
@@ -89,6 +89,7 @@ class MatAnyOneRequest:
     codec: str = "libx264_8"
     metadata_mode: str = "metadata"
     metadata_state: Optional[MetadataState] = None
+    media_context: Optional[MediaPersistenceContext] = None
     notifier: Optional[Callable[[str], None]] = None
 
     def __post_init__(self) -> None:
@@ -390,6 +391,114 @@ def _compose_outputs(
     raise ValueError(f"Unsupported mask type '{request.mask_type}'.")
 
 
+def _safe_fps(value: float) -> float:
+    try:
+        fps = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    return fps if fps > 0 else 1.0
+
+
+def _effective_codec(request: MatAnyOneRequest) -> str:
+    if request.codec:
+        return str(request.codec)
+    context = request.media_context
+    if context is not None:
+        codec = getattr(context.video_template, "codec_type", None)
+        if codec:
+            return str(codec)
+    return "libx264_8"
+
+
+def _effective_container(request: MatAnyOneRequest) -> str:
+    context = request.media_context
+    container = None
+    if context is not None:
+        container = getattr(context.video_template, "container", None)
+    if not container:
+        return "mp4"
+    normalized = str(container)
+    return normalized[1:] if normalized.startswith(".") else normalized
+
+
+def _ensure_container_suffix(path: Path, container: str) -> Path:
+    suffix = container if container.startswith(".") else f".{container}"
+    path_str = str(path)
+    if path_str.endswith(suffix):
+        return Path(path_str)
+    return Path(f"{path_str}{suffix}")
+
+
+def _video_overrides(request: MatAnyOneRequest, fps: float) -> Dict[str, object]:
+    overrides: Dict[str, object] = {"fps": _safe_fps(fps)}
+    if request.codec:
+        overrides["codec_type"] = request.codec
+    return overrides
+
+
+def _save_video_artifact(
+    data: List[np.ndarray],
+    base_path: Path,
+    *,
+    request: MatAnyOneRequest,
+    fps: float,
+    logger: logging.Logger,
+) -> Path:
+    context = request.media_context
+    overrides = _video_overrides(request, fps)
+    if context is not None:
+        try:
+            result = context.save_video(
+                data,
+                str(base_path),
+                logger=logger,
+                overrides=overrides,
+            )
+            if result:
+                return Path(result)
+        except AttributeError:
+            pass
+    target = _ensure_container_suffix(base_path, _effective_container(request))
+    saved_path = save_video(
+        data,
+        str(target),
+        fps=_safe_fps(fps),
+        codec_type=_effective_codec(request),
+        logger=logger,
+    )
+    return Path(saved_path if saved_path else target)
+
+
+def _save_mask_archive_artifact(
+    frames: Optional[List[np.ndarray]],
+    foreground_path: Path,
+    *,
+    request: MatAnyOneRequest,
+    logger: logging.Logger,
+) -> Optional[Path]:
+    if frames is None:
+        return None
+
+    archive_path = foreground_path.with_suffix(".zip")
+    context = request.media_context
+    if context is not None:
+        try:
+            result = context.save_mask_archive(
+                frames,
+                str(archive_path),
+                logger=logger,
+                force=False,
+            )
+            return Path(result) if result else None
+        except AttributeError:
+            pass
+
+    from models.wan.alpha.utils import write_zip_file  # type: ignore (local import)
+
+    write_zip_file(str(archive_path), frames)
+    return archive_path
+
+
 def _save_outputs(
     request: MatAnyOneRequest,
     frames: List[np.ndarray],
@@ -413,20 +522,22 @@ def _save_outputs(
         suffix_parts.append(request.new_dim.replace(" ", "_"))
     prefix = truncate_for_filesystem("_".join(filter(None, [base_name] + suffix_parts)))
 
-    foreground_path = request.output_dir / f"{prefix}{foreground_suffix}.mp4"
-    alpha_path = request.output_dir / f"{prefix}{alpha_suffix}.mp4"
+    container = _effective_container(request)
+    foreground_base = request.output_dir / f"{prefix}{foreground_suffix}"
+    alpha_base = request.output_dir / f"{prefix}{alpha_suffix}"
 
     if audio_tracks:
-        temp_foreground = request.output_dir / f"{prefix}{foreground_suffix}_tmp.mp4"
-        temp_video_path = save_video(
+        temp_base = request.output_dir / f"{prefix}{foreground_suffix}_tmp"
+        temp_video_path = _save_video_artifact(
             frames,
-            str(temp_foreground),
+            temp_base,
+            request=request,
             fps=fps,
-            codec_type=request.codec,
             logger=media_logger,
         )
+        foreground_path = _ensure_container_suffix(foreground_base, container)
         combine_video_with_audio_tracks(
-            temp_video_path,
+            str(temp_video_path),
             audio_tracks,
             str(foreground_path),
             audio_metadata=audio_metadata,
@@ -435,39 +546,39 @@ def _save_outputs(
         temp_file = Path(temp_video_path)
         if temp_file.exists():
             temp_file.unlink()
-        final_foreground_path = foreground_path
     else:
-        saved_path = save_video(
+        foreground_path = _save_video_artifact(
             frames,
-            str(foreground_path),
+            foreground_base,
+            request=request,
             fps=fps,
-            codec_type=request.codec,
             logger=media_logger,
         )
-        final_foreground_path = Path(saved_path)
 
-    saved_alpha_path = save_video(
+    alpha_path = _save_video_artifact(
         alpha_frames,
-        str(alpha_path),
+        alpha_base,
+        request=request,
         fps=fps,
-        codec_type=request.codec,
         logger=media_logger,
     )
-    final_alpha_path = Path(saved_alpha_path)
 
     rgba_zip_path: Optional[Path] = None
     if rgba_frames is not None:
-        from models.wan.alpha.utils import write_zip_file  # type: ignore (local import)
-
-        rgba_zip_path = request.output_dir / f"{prefix}{foreground_suffix}.zip"
-        write_zip_file(str(rgba_zip_path), rgba_frames)
+        rgba_zip_path = _save_mask_archive_artifact(
+            rgba_frames,
+            foreground_path,
+            request=request,
+            logger=media_logger,
+        )
 
     metadata = {
         "mask_type": request.mask_type,
         "matting_type": request.matting_type,
         "frames": len(frames),
         "fps": fps,
-        "codec": request.codec,
+        "codec": _effective_codec(request),
+        "container": container,
         "attach_audio": bool(audio_tracks),
         "start_frame": request.start_frame,
         "end_frame": request.end_frame,
@@ -508,15 +619,15 @@ def _save_outputs(
 
     foreground_metadata = dict(metadata)
     foreground_metadata["artifact_role"] = "foreground"
-    _write_metadata(final_foreground_path, foreground_metadata)
+    _write_metadata(foreground_path, foreground_metadata)
 
     alpha_metadata = dict(metadata)
     alpha_metadata["artifact_role"] = "alpha"
-    _write_metadata(final_alpha_path, alpha_metadata)
+    _write_metadata(alpha_path, alpha_metadata)
 
     return MatAnyOneResult(
-        foreground_path=final_foreground_path,
-        alpha_path=final_alpha_path,
+        foreground_path=foreground_path,
+        alpha_path=alpha_path,
         rgba_zip_path=rgba_zip_path,
         frames_processed=len(frames),
         fps=fps,

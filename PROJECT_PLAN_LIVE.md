@@ -27,7 +27,7 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 - [In Progress] Audit preprocessing utilities for GUI assumptions and refactor or remove as needed.
 - [Pending] Gate or retire models that still require interactive inputs.
 - [Planned] Extract the prompt enhancer stack into a shared module and stand up a provider abstraction for local/cloud backends.
-- [Planned] Thread `MediaPersistenceContext` through MatAnyOne so preprocessing mask/audio exports mirror the headless generation pipeline.
+- [Completed] Thread `MediaPersistenceContext` through MatAnyOne so preprocessing mask/audio exports mirror the headless generation pipeline (2025-11-01).
 
 **Milestone 5 – Retire ancillary runtimes (Pending)**
 - [Pending] Remove Docker scripts and legacy launch docs once CLI parity is confirmed.
@@ -50,9 +50,9 @@ The headless build never exposes GUI-driven affordances — video/audio playback
 ---
 
 ## Immediate Next Actions
-- Port MatAnyOne mask/audio writers to the shared `MediaPersistenceContext` so preprocessing artefacts respect codec overrides and the `save_masks` toggle.
-  - **Proposal (2025-11-04)**: Thread the per-run media context through `cli.matanyone` and replace direct `save_image`/ZIP calls with `_save_*_artifact` helpers, mirroring the main generation path.
-  - **Rationale**: Keeps preprocessing outputs aligned with the headless persistence pipeline, preventing drift between mask/audio artefacts produced by generation and MatAnyOne.
+- Backfill MatAnyOne persistence tests exercising MediaPersistenceContext overrides and `save_masks` gating.
+  - **Proposal (2025-11-01)**: Add focused unit coverage that mocks the context to confirm codec/container overrides, audio pass-through, and mask archive skip/emit logic, ensuring future refactors preserve the new behaviour.
+  - **Rationale**: Codifies the headless persistence expectations so regressions in MatAnyOne output handling are caught automatically.
 - Define a lightweight artifact manifest spec for CLI runs (JSONL or per-run summary) that captures saved paths, metadata mode, and adapter payload hashes.
   - **Proposal (2025-11-04)**: Draft a minimal schema, prototype emission in dry-run mode, and socialise with operators before wiring into `cli.generate`.
   - **Rationale**: Replaces ad-hoc logging with machine-readable manifests, improving reproducibility audits and integration with external schedulers.
