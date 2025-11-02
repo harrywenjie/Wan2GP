@@ -34,6 +34,7 @@
 - [Completed] Surfaced MatAnyOne audio artifact metadata (sample rate, duration, language, channels) through CLI logging and manifest entries for downstream automation (2025-11-02).
 - [Completed] Queue summaries and control-server status payloads now expose MatAnyOne audio metadata (`audio_tracks`) for orchestration clients (2025-11-02).
 - [Completed] `cli.queue_controller_smoke` now seeds audio metadata and asserts the TCP `status` payload plus queue summary reflect `audio_tracks` fields end-to-end (2025-11-02).
+- [Completed] Dwpose debug mask exports now route through `MediaPersistenceContext.save_video`, so CLI persistence honours shared codec/container defaults and manifest logging (2025-11-02).
 - [Planned] Finish disk-first workflows for mask/voice pipelines and document validation expectations for each CLI entrypoint.
 - [Planned] Emit a machine-readable artifact manifest from `cli.generate` capturing saved paths, metadata mode, and adapter payload hashes.
 
@@ -84,12 +85,12 @@
 ---
 
 ## Immediate Next Actions
-- Solidify `preprocessing/dwpose` persistence on `core.io.media` now that `save_one_video` wraps `write_video`.
-  - **Proposal (2025-11-02)**: Trace how `save_one_video` is consumed (CLI helpers, legacy scripts) and thread a `MediaPersistenceContext` or explicit `VideoSaveConfig` clones through those call sites so codec/container overrides stay aligned with the Production Manager defaults.
-  - **Rationale**: The wrapper ensures consistent logging/retry semantics; wiring it into real call paths keeps annotate/export flows deterministic and unlocks manifest logging when the annotator runs under CLI control.
-  - **Design (2025-11-02)**: Replace ad-hoc writer configuration with context-driven helpers, carry existing macro block/quality overrides through `config.extra_params`, and document the contract in `docs/IO_MEDIA_MIGRATION.md` before adding regression coverage.
 - Stress-test queue-control audio summaries with multi-track payloads to make sure textual output scales beyond single-track MatAnyOne runs.
   - **Proposal (2025-11-02)**: Extend the smoke harness fixtures (or add a dedicated test) to seed multiple audio entries with mixed metadata, then assert both the JSON payload and queue summary enumerate each track cleanly.
   - **Rationale**: Bilingual or commentary-dual exports depend on multiple tracks; coverage here prevents regressions as persistence adapters evolve.
   - **Design (2025-11-02)**: Generalise the stub manager’s audio injection helper so future tests can reuse it, and verify summary formatting via targeted string assertions before promoting the helper into reusable test utilities.
+- Add regression coverage for Dwpose debug persistence so context-driven saves stay locked to Production Manager defaults.
+  - **Proposal (2025-11-02)**: Patch `preprocess_video_with_mask` via dependency injection in a unit test to assert `save_one_video` receives `MediaPersistenceContext` configs when debug exports are enabled, and confirm filenames align with the legacy `masked_frames{n}.mp4` scheme.
+  - **Rationale**: The new context threading replaces `imageio` writers; coverage ensures future refactors keep the debug path wired through manifest-aware persistence.
+  - **Design (2025-11-02)**: Stub a minimal context with counters for `save_video` calls, simulate mask/video tensors, and validate both the frame/mask exports and config overrides (FPS, quality) before promoting the helper into reusable fixtures.
  

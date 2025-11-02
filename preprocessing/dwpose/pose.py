@@ -3,6 +3,9 @@
 
 import logging
 import os
+from dataclasses import replace
+from typing import Any, Iterable, Optional, Sequence
+
 import cv2
 import torch
 import numpy as np
@@ -12,7 +15,7 @@ from PIL import Image
 import onnxruntime as ort
 from concurrent.futures import ThreadPoolExecutor
 import threading
-from core.io.media import VideoSaveConfig, write_video
+from core.io.media import LoggerCallable, MediaPersistenceContext, VideoSaveConfig, write_video
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
@@ -418,14 +421,87 @@ class PoseBodyFaceHandVideoAnnotator(OptimizedPoseBodyFaceHandVideoAnnotator):
 logger = logging.getLogger(__name__)
 
 
-def save_one_video(file_path, videos, fps=8, quality=8, macro_block_size=None):
-    config = VideoSaveConfig(fps=fps)
-    if quality is not None:
-        config.extra_params["quality"] = quality
-    if macro_block_size is not None:
-        config.extra_params["macro_block_size"] = macro_block_size
+def _ensure_numpy_sequence(videos: Any) -> Sequence[np.ndarray]:
+    """Return a sequence of ``np.ndarray`` frames suitable for ``write_video``."""
 
-    result = write_video(videos, file_path, config=config, logger=logger)
+    def _to_numpy(frame: Any) -> np.ndarray:
+        if torch.is_tensor(frame):
+            array = frame.detach().cpu().numpy()
+        elif isinstance(frame, np.ndarray):
+            array = frame
+        elif isinstance(frame, Image.Image):
+            array = np.array(frame)
+        else:
+            array = np.asarray(frame)
+
+        if array.dtype != np.uint8:
+            array = np.clip(array, 0, 255).astype(np.uint8)
+        return array
+
+    if videos is None:
+        return []
+
+    if torch.is_tensor(videos):
+        tensor = videos.detach().cpu()
+        if tensor.ndim == 3:
+            tensor = tensor.unsqueeze(0)
+        return [_to_numpy(frame) for frame in tensor]
+
+    if isinstance(videos, np.ndarray):
+        return [_to_numpy(frame) for frame in videos]
+
+    if isinstance(videos, (list, tuple)):
+        return [_to_numpy(frame) for frame in videos]
+
+    if isinstance(videos, Iterable):
+        return [_to_numpy(frame) for frame in list(videos)]
+
+    raise TypeError(f"Unsupported video container type: {type(videos)!r}")
+
+
+def save_one_video(
+    file_path,
+    videos,
+    fps: int = 8,
+    quality: Optional[int] = 8,
+    macro_block_size: Optional[int] = None,
+    *,
+    media_context: Optional[MediaPersistenceContext] = None,
+    config: Optional[VideoSaveConfig] = None,
+    logger_override: Optional[LoggerCallable] = None,
+):
+    """Persist a frame sequence using shared media persistence helpers."""
+
+    frames = _ensure_numpy_sequence(videos)
+    if len(frames) == 0:
+        return False
+
+    effective_config: VideoSaveConfig
+    if config is not None:
+        effective_config = replace(config)
+        effective_config.extra_params = dict(config.extra_params)
+    elif media_context is not None:
+        effective_config = media_context.video_config(fps=fps)
+    else:
+        effective_config = VideoSaveConfig(fps=fps)
+
+    effective_config.fps = fps
+    if quality is not None:
+        effective_config.extra_params["quality"] = quality
+    if macro_block_size is not None:
+        effective_config.extra_params["macro_block_size"] = macro_block_size
+
+    target_logger: Optional[LoggerCallable] = logger_override or logger
+    if media_context is not None:
+        result = media_context.save_video(
+            frames,
+            file_path,
+            logger=target_logger,
+            config=effective_config,
+        )
+    else:
+        result = write_video(frames, file_path, config=effective_config, logger=target_logger)
+
     return bool(result)
     
 def get_frames(video_path):

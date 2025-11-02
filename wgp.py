@@ -2098,7 +2098,7 @@ def extract_faces_from_video_with_mask(*_args, **_kwargs):
     )
 
 
-def preprocess_video_with_mask(input_video_path, input_mask_path, height, width,  max_frames, start_frame=0, fit_canvas = None, fit_crop = False, target_fps = 16, block_size= 16, expand_scale = 2, process_type = "inpaint", process_type2 = None, to_bbox = False, RGB_Mask = False, negate_mask = False, process_outside_mask = None, inpaint_color = 127, outpainting_dims = None, proc_no = 1):
+def preprocess_video_with_mask(input_video_path, input_mask_path, height, width,  max_frames, start_frame=0, fit_canvas = None, fit_crop = False, target_fps = 16, block_size= 16, expand_scale = 2, process_type = "inpaint", process_type2 = None, to_bbox = False, RGB_Mask = False, negate_mask = False, process_outside_mask = None, inpaint_color = 127, outpainting_dims = None, proc_no = 1, *, save_debug=False, debug_media_context=None, debug_video_config=None, debug_mask_config=None, debug_logger=None):
 
     def mask_to_xyxy_box(mask):
         rows, cols = np.where(mask == 255)
@@ -2275,13 +2275,33 @@ def preprocess_video_with_mask(input_video_path, input_mask_path, height, width,
         proc_list[frame_no] = proc_list_outside[frame_no] = proc_mask[frame_no] = None
 
 
-    # if args.save_masks:
-    #     from preprocessing.dwpose.pose import save_one_video
-    #     saved_masked_frames = [mask.cpu().numpy() for mask in masked_frames ]
-    #     save_one_video(f"masked_frames{'' if proc_no==1 else str(proc_no)}.mp4", saved_masked_frames, fps=target_fps, quality=8, macro_block_size=None)
-    #     if any_mask:
-    #         saved_masks = [mask.cpu().numpy() for mask in masks ]
-    #         save_one_video("masks.mp4", saved_masks, fps=target_fps, quality=8, macro_block_size=None)
+    if save_debug and len(masked_frames) > 0:
+        from preprocessing.dwpose.pose import save_one_video
+
+        suffix = "" if proc_no == 1 else str(proc_no)
+        frame_path = f"masked_frames{suffix}.mp4"
+        save_one_video(
+            frame_path,
+            [frame.cpu().numpy() for frame in masked_frames],
+            fps=target_fps,
+            quality=8,
+            macro_block_size=None,
+            media_context=debug_media_context,
+            config=debug_video_config,
+            logger_override=debug_logger,
+        )
+        if any_mask and len(masks) > 0:
+            mask_path = f"masks{suffix}.mp4"
+            save_one_video(
+                mask_path,
+                [mask.cpu().numpy() for mask in masks],
+                fps=target_fps,
+                quality=8,
+                macro_block_size=None,
+                media_context=debug_media_context,
+                config=debug_mask_config,
+                logger_override=debug_logger,
+            )
     preproc = None
     preproc_outside = None
     gc.collect()
@@ -3595,9 +3615,62 @@ def generate_video(
                 context_scale = [control_net_weight /2, control_net_weight2 /2] if preprocess_type2 is not None else [control_net_weight]
                 if not (preprocess_type == "identity" and preprocess_type2 is None and video_mask is None):send_cmd("progress", [0, get_latest_status(state, status_info)])
                 inpaint_color = 0 if preprocess_type=="pose" and process_outside_mask == "inpaint" else guide_inpaint_color
-                video_guide_processed, video_mask_processed = preprocess_video_with_mask(video_guide if sparse_video_image is None else sparse_video_image, video_mask, height=image_size[0], width = image_size[1], max_frames= guide_frames_extract_count, start_frame = guide_frames_extract_start, fit_canvas = sample_fit_canvas, fit_crop = fit_crop, target_fps = fps,  process_type = preprocess_type, expand_scale = mask_expand, RGB_Mask = True, negate_mask = "N" in video_prompt_type, process_outside_mask = process_outside_mask, outpainting_dims = outpainting_dims, proc_no =1, inpaint_color =inpaint_color, block_size = block_size, to_bbox = "H" in video_prompt_type )
+                save_debug_outputs = should_save_debug_masks()
+                debug_logger = get_notifications_logger() if save_debug_outputs else None
+                debug_video_config = resolve_video_config(fps=fps) if save_debug_outputs else None
+                debug_mask_config = resolve_video_config(fps=fps, value_range=(0, 1)) if save_debug_outputs else None
+                video_guide_processed, video_mask_processed = preprocess_video_with_mask(
+                    video_guide if sparse_video_image is None else sparse_video_image,
+                    video_mask,
+                    height=image_size[0],
+                    width = image_size[1],
+                    max_frames= guide_frames_extract_count,
+                    start_frame = guide_frames_extract_start,
+                    fit_canvas = sample_fit_canvas,
+                    fit_crop = fit_crop,
+                    target_fps = fps,
+                    process_type = preprocess_type,
+                    expand_scale = mask_expand,
+                    RGB_Mask = True,
+                    negate_mask = "N" in video_prompt_type,
+                    process_outside_mask = process_outside_mask,
+                    outpainting_dims = outpainting_dims,
+                    proc_no =1,
+                    inpaint_color =inpaint_color,
+                    block_size = block_size,
+                    to_bbox = "H" in video_prompt_type,
+                    save_debug=save_debug_outputs,
+                    debug_media_context=media_context,
+                    debug_video_config=debug_video_config,
+                    debug_mask_config=debug_mask_config,
+                    debug_logger=debug_logger,
+                )
                 if preprocess_type2 != None:
-                    video_guide_processed2, video_mask_processed2 = preprocess_video_with_mask(video_guide, video_mask, height=image_size[0], width = image_size[1], max_frames= guide_frames_extract_count, start_frame = guide_frames_extract_start, fit_canvas = sample_fit_canvas, fit_crop = fit_crop, target_fps = fps,  process_type = preprocess_type2, expand_scale = mask_expand, RGB_Mask = True, negate_mask = "N" in video_prompt_type, process_outside_mask = process_outside_mask, outpainting_dims = outpainting_dims, proc_no =2, block_size = block_size, to_bbox = "H" in video_prompt_type  )
+                    video_guide_processed2, video_mask_processed2 = preprocess_video_with_mask(
+                        video_guide,
+                        video_mask,
+                        height=image_size[0],
+                        width = image_size[1],
+                        max_frames= guide_frames_extract_count,
+                        start_frame = guide_frames_extract_start,
+                        fit_canvas = sample_fit_canvas,
+                        fit_crop = fit_crop,
+                        target_fps = fps,
+                        process_type = preprocess_type2,
+                        expand_scale = mask_expand,
+                        RGB_Mask = True,
+                        negate_mask = "N" in video_prompt_type,
+                        process_outside_mask = process_outside_mask,
+                        outpainting_dims = outpainting_dims,
+                        proc_no =2,
+                        block_size = block_size,
+                        to_bbox = "H" in video_prompt_type,
+                        save_debug=save_debug_outputs,
+                        debug_media_context=media_context,
+                        debug_video_config=debug_video_config,
+                        debug_mask_config=debug_mask_config,
+                        debug_logger=debug_logger,
+                    )
 
                 if video_guide_processed is not None  and sample_fit_canvas is not None:
                     image_size = video_guide_processed.shape[-2:]
